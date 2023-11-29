@@ -19,12 +19,13 @@ package options
 import (
 	"fmt"
 
-	"github.com/google/uuid"
-
 	"k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	certutil "k8s.io/client-go/util/cert"
+
+	"github.com/google/uuid"
 )
 
 type SecureServingOptionsWithLoopback struct {
@@ -47,6 +48,10 @@ func (s *SecureServingOptionsWithLoopback) ApplyTo(secureServingInfo **server.Se
 
 	if *secureServingInfo == nil || loopbackClientConfig == nil {
 		return nil
+	}
+
+	if s.LoopbackConfigFile != "" {
+		return s.applyTo(loopbackClientConfig)
 	}
 
 	// create self-signed cert+key with the fake server.LoopbackClientServerNameOverride and
@@ -77,5 +82,18 @@ func (s *SecureServingOptionsWithLoopback) ApplyTo(secureServingInfo **server.Se
 		*loopbackClientConfig = secureLoopbackClientConfig
 	}
 
+	return nil
+}
+
+func (s *SecureServingOptionsWithLoopback) applyTo(loopbackConfig **rest.Config) error {
+	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: s.LoopbackConfigFile}
+	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load loopback config: %v", err)
+	}
+	if restConfig.BearerToken == "" {
+		restConfig.BearerToken = uuid.New().String()
+	}
+	*loopbackConfig = restConfig
 	return nil
 }

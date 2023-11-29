@@ -56,6 +56,7 @@ func (opts *ServerRunOptions) Complete() (CompletedOptions, error) {
 	if err != nil {
 		return CompletedOptions{}, err
 	}
+	// todo: @wm775825 change alt dns?
 	controlplane, err := opts.Options.Complete([]string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, []net.IP{apiServerServiceIP})
 	if err != nil {
 		return CompletedOptions{}, err
