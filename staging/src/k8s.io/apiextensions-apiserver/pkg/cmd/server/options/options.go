@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/url"
 
+	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 	"github.com/spf13/pflag"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
@@ -40,8 +41,10 @@ import (
 	"k8s.io/apiserver/pkg/util/openapi"
 	"k8s.io/apiserver/pkg/util/proxy"
 	"k8s.io/apiserver/pkg/util/webhook"
+	"k8s.io/client-go/informers"
 	scheme "k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/rest"
 	netutils "k8s.io/utils/net"
 )
 
@@ -117,7 +120,7 @@ func (o CustomResourceDefinitionsServerOptions) Config() (*apiserver.Config, err
 	config := &apiserver.Config{
 		GenericConfig: serverConfig,
 		ExtraConfig: apiserver.ExtraConfig{
-			CRDRESTOptionsGetter: NewCRDRESTOptionsGetter(*o.RecommendedOptions.Etcd, serverConfig.ResourceTransformers, serverConfig.StorageObjectCountTracker),
+			CRDRESTOptionsGetter: NewCRDRESTOptionsGetter(*o.RecommendedOptions.Etcd, serverConfig.ResourceTransformers, serverConfig.StorageObjectCountTracker, nil, nil, nil),
 			ServiceResolver:      &serviceResolver{serverConfig.SharedInformerFactory.Core().V1().Services().Lister()},
 			AuthResolverWrapper:  webhook.NewDefaultAuthenticationInfoResolverWrapper(nil, nil, serverConfig.LoopbackClientConfig, oteltrace.NewNoopTracerProvider()),
 		},
@@ -129,13 +132,14 @@ func (o CustomResourceDefinitionsServerOptions) Config() (*apiserver.Config, err
 //
 // Avoid messing with anything outside of changes to StorageConfig as that
 // may lead to unexpected behavior when the options are applied.
-func NewCRDRESTOptionsGetter(etcdOptions genericoptions.EtcdOptions, resourceTransformers storagevalue.ResourceTransformers, tracker flowcontrolrequest.StorageObjectCountTracker) genericregistry.RESTOptionsGetter {
+func NewCRDRESTOptionsGetter(etcdOptions genericoptions.EtcdOptions, resourceTransformers storagevalue.ResourceTransformers, tracker flowcontrolrequest.StorageObjectCountTracker,
+	kubeInformers informers.SharedInformerFactory, karmadaInformers karmadainformers.SharedInformerFactory, restConfig *rest.Config) genericregistry.RESTOptionsGetter {
 	etcdOptionsCopy := etcdOptions
 	etcdOptionsCopy.StorageConfig.Codec = unstructured.UnstructuredJSONScheme
 	etcdOptionsCopy.StorageConfig.StorageObjectCountTracker = tracker
 	etcdOptionsCopy.WatchCacheSizes = nil // this control is not provided for custom resources
 
-	return etcdOptions.CreateRESTOptionsGetter(&genericoptions.SimpleStorageFactory{StorageConfig: etcdOptionsCopy.StorageConfig}, resourceTransformers)
+	return etcdOptions.CreateRESTOptionsGetter(&genericoptions.SimpleStorageFactory{StorageConfig: etcdOptionsCopy.StorageConfig}, resourceTransformers, kubeInformers, karmadaInformers, restConfig)
 }
 
 type serviceResolver struct {

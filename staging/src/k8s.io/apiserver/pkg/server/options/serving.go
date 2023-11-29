@@ -32,6 +32,7 @@ import (
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
+	"k8s.io/client-go/tools/clientcmd"
 	certutil "k8s.io/client-go/util/cert"
 	"k8s.io/client-go/util/keyutil"
 	cliflag "k8s.io/component-base/cli/flag"
@@ -76,6 +77,9 @@ type SecureServingOptions struct {
 
 	// PermitAddressSharing controls if SO_REUSEADDR is used when binding the port.
 	PermitAddressSharing bool
+
+	// LoopbackConfigFile is the file path of loopback config, which content is in kube-config format.
+	LoopbackConfigFile string
 }
 
 type CertKey struct {
@@ -213,6 +217,9 @@ func (s *SecureServingOptions) AddFlags(fs *pflag.FlagSet) {
 		"If true, SO_REUSEADDR will be used when binding the port. This allows binding "+
 			"to wildcard IPs like 0.0.0.0 and specific IPs in parallel, and it avoids waiting "+
 			"for the kernel to release sockets in TIME_WAIT state. [default=false]")
+
+	fs.StringVar(&s.LoopbackConfigFile, "loopback-config-file", s.LoopbackConfigFile,
+		"File containing kube-config used by loopback")
 }
 
 // ApplyTo fills up serving information in the server configuration.
@@ -295,6 +302,12 @@ func (s *SecureServingOptions) ApplyTo(config **server.SecureServingInfo) error 
 		}
 	}
 	c.SNICerts = namedTLSCerts
+
+	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: s.LoopbackConfigFile}
+	_, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load loopback config: %v", err)
+	}
 
 	return nil
 }

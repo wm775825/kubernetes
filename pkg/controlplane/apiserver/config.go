@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"time"
 
+	karmadaclientset "github.com/karmada-io/karmada/pkg/generated/clientset/versioned"
+	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -62,6 +64,7 @@ func BuildGenericConfig(
 ) (
 	genericConfig *genericapiserver.Config,
 	versionedInformers clientgoinformers.SharedInformerFactory,
+	karmadaInformers karmadainformers.SharedInformerFactory,
 	storageFactory *serverstorage.DefaultStorageFactory,
 
 	lastErr error,
@@ -76,6 +79,10 @@ func BuildGenericConfig(
 	if lastErr = s.SecureServing.ApplyTo(&genericConfig.SecureServing, &genericConfig.LoopbackClientConfig); lastErr != nil {
 		return
 	}
+	// Disable compression for self-communication, since we are going to be
+	// on a fast local network
+	genericConfig.LoopbackClientConfig.DisableCompression = true
+
 	if lastErr = s.Features.ApplyTo(genericConfig); lastErr != nil {
 		return
 	}
@@ -115,25 +122,6 @@ func BuildGenericConfig(
 		s.Etcd.StorageConfig.Transport.TracerProvider = oteltrace.NewNoopTracerProvider()
 	}
 
-	storageFactoryConfig := kubeapiserver.NewStorageFactoryConfig()
-	storageFactoryConfig.APIResourceConfig = genericConfig.MergedResourceConfig
-	storageFactory, lastErr = storageFactoryConfig.Complete(s.Etcd).New()
-	if lastErr != nil {
-		return
-	}
-	if lastErr = s.Etcd.ApplyWithStorageFactoryTo(storageFactory, genericConfig); lastErr != nil {
-		return
-	}
-
-	// Use protobufs for self-communication.
-	// Since not every generic apiserver has to support protobufs, we
-	// cannot default to it in generic apiserver and need to explicitly
-	// set it in kube-apiserver.
-	genericConfig.LoopbackClientConfig.ContentConfig.ContentType = "application/vnd.kubernetes.protobuf"
-	// Disable compression for self-communication, since we are going to be
-	// on a fast local network
-	genericConfig.LoopbackClientConfig.DisableCompression = true
-
 	kubeClientConfig := genericConfig.LoopbackClientConfig
 	clientgoExternalClient, err := clientgoclientset.NewForConfig(kubeClientConfig)
 	if err != nil {
@@ -141,6 +129,23 @@ func BuildGenericConfig(
 		return
 	}
 	versionedInformers = clientgoinformers.NewSharedInformerFactory(clientgoExternalClient, 10*time.Minute)
+
+	karmadaClientConfig := genericConfig.LoopbackClientConfig
+	karmadaClientset, lastErr := karmadaclientset.NewForConfig(karmadaClientConfig)
+	if lastErr != nil {
+		return
+	}
+	karmadaInformers = karmadainformers.NewSharedInformerFactory(karmadaClientset, 10*time.Minute)
+
+	storageFactoryConfig := kubeapiserver.NewStorageFactoryConfig()
+	storageFactoryConfig.APIResourceConfig = genericConfig.MergedResourceConfig
+	storageFactory, lastErr = storageFactoryConfig.Complete(s.Etcd).New()
+	if lastErr != nil {
+		return
+	}
+	if lastErr = s.Etcd.ApplyWithStorageFactoryTo(storageFactory, genericConfig, versionedInformers, karmadaInformers, genericConfig.LoopbackClientConfig); lastErr != nil {
+		return
+	}
 
 	// Authentication.ApplyTo requires already applied OpenAPIConfig and EgressSelector if present
 	if lastErr = s.Authentication.ApplyTo(&genericConfig.Authentication, genericConfig.SecureServing, genericConfig.EgressSelector, genericConfig.OpenAPIConfig, genericConfig.OpenAPIV3Config, clientgoExternalClient, versionedInformers); lastErr != nil {

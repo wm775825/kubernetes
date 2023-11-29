@@ -26,9 +26,12 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server"
+	"k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/webhook"
 	"k8s.io/client-go/informers"
+
+	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 
 	controlplaneapiserver "k8s.io/kubernetes/pkg/controlplane/apiserver/options"
 )
@@ -36,6 +39,7 @@ import (
 func CreateAPIExtensionsConfig(
 	kubeAPIServerConfig server.Config,
 	kubeInformers informers.SharedInformerFactory,
+	karmadaInformers karmadainformers.SharedInformerFactory,
 	pluginInitializers []admission.PluginInitializer,
 	commandOptions controlplaneapiserver.CompletedOptions,
 	masterCount int,
@@ -58,7 +62,10 @@ func CreateAPIExtensionsConfig(
 	// prefer the more compact serialization (v1beta1) for storage until https://issue.k8s.io/82292 is resolved for objects whose v1 serialization is too big but whose v1beta1 serialization can be stored
 	etcdOptions.StorageConfig.EncodeVersioner = runtime.NewMultiGroupVersioner(v1beta1.SchemeGroupVersion, schema.GroupKind{Group: v1beta1.GroupName})
 	etcdOptions.SkipHealthEndpoints = true // avoid double wiring of health checks
-	if err := etcdOptions.ApplyTo(&genericConfig); err != nil {
+	if etcdOptions.StorageConfig.StorageObjectCountTracker == nil {
+		etcdOptions.StorageConfig.StorageObjectCountTracker = genericConfig.StorageObjectCountTracker
+	}
+	if err := etcdOptions.ApplyWithStorageFactoryTo(&options.SimpleStorageFactory{StorageConfig: etcdOptions.StorageConfig}, &genericConfig, kubeInformers, karmadaInformers, genericConfig.LoopbackClientConfig); err != nil {
 		return nil, err
 	}
 
@@ -75,7 +82,7 @@ func CreateAPIExtensionsConfig(
 			SharedInformerFactory: kubeInformers,
 		},
 		ExtraConfig: apiextensionsapiserver.ExtraConfig{
-			CRDRESTOptionsGetter: apiextensionsoptions.NewCRDRESTOptionsGetter(etcdOptions, genericConfig.ResourceTransformers, genericConfig.StorageObjectCountTracker),
+			CRDRESTOptionsGetter: apiextensionsoptions.NewCRDRESTOptionsGetter(etcdOptions, genericConfig.ResourceTransformers, genericConfig.StorageObjectCountTracker, kubeInformers, karmadaInformers, genericConfig.LoopbackClientConfig),
 			MasterCount:          masterCount,
 			AuthResolverWrapper:  authResolverWrapper,
 			ServiceResolver:      serviceResolver,

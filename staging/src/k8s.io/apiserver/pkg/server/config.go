@@ -34,6 +34,7 @@ import (
 
 	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/google/uuid"
+	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 	"golang.org/x/crypto/cryptobyte"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -72,6 +73,7 @@ import (
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
 	"k8s.io/client-go/informers"
 	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/component-base/logs"
 	"k8s.io/component-base/metrics/features"
 	"k8s.io/component-base/metrics/prometheus/slis"
@@ -401,6 +403,7 @@ func NewConfig(codecs serializer.CodecFactory) *Config {
 	lifecycleSignals := newLifecycleSignals()
 
 	return &Config{
+		SkipOpenAPIInstallation:        true,
 		Serializer:                     codecs,
 		BuildHandlerChainFunc:          DefaultBuildHandlerChain,
 		NonLongRunningRequestWaitGroup: new(utilwaitgroup.SafeWaitGroup),
@@ -517,6 +520,9 @@ type completedConfig struct {
 
 	// SharedInformerFactory provides shared informers for resources
 	SharedInformerFactory informers.SharedInformerFactory
+
+	// KarmadaInformers provides shared informers for karmada resources
+	KarmadaInformers karmadainformers.SharedInformerFactory
 }
 
 type CompletedConfig struct {
@@ -615,7 +621,7 @@ func (c *Config) DrainedNotify() <-chan struct{} {
 
 // Complete fills in any fields not set that are required to have valid data and can be derived
 // from other fields. If you're going to `ApplyOptions`, do that first. It's mutating the receiver.
-func (c *Config) Complete(informers informers.SharedInformerFactory) CompletedConfig {
+func (c *Config) Complete(informers informers.SharedInformerFactory, karmadaInformers ...karmadainformers.SharedInformerFactory) CompletedConfig {
 	if len(c.ExternalAddress) == 0 && c.PublicAddress != nil {
 		c.ExternalAddress = c.PublicAddress.String()
 	}
@@ -660,7 +666,11 @@ func (c *Config) Complete(informers informers.SharedInformerFactory) CompletedCo
 		}
 	}
 
-	return CompletedConfig{&completedConfig{c, informers}}
+	var karmadaInformer karmadainformers.SharedInformerFactory
+	if len(karmadaInformers) != 0 {
+		karmadaInformer = karmadaInformers[0]
+	}
+	return CompletedConfig{completedConfig: &completedConfig{Config: c, SharedInformerFactory: informers, KarmadaInformers: karmadaInformer}}
 }
 
 // Complete fills in any fields not set that are required to have valid data and can be derived
@@ -806,6 +816,23 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 		err := s.AddReadyzChecks(healthz.NewInformerSyncHealthz(c.SharedInformerFactory))
 		if err != nil {
 			return nil, err
+		}
+	}
+
+	karmadaHookName := "karmada-apiserver-start-informers"
+	if c.KarmadaInformers != nil {
+		if !s.isPostStartHookRegistered(karmadaHookName) {
+			err := s.AddPostStartHook(karmadaHookName, func(context PostStartHookContext) error {
+				informer := c.KarmadaInformers.Cluster().V1alpha1().Clusters().Informer()
+				c.KarmadaInformers.Start(context.StopCh)
+				if !cache.WaitForCacheSync(context.StopCh, informer.HasSynced) {
+					return fmt.Errorf("karmada informers timed out waiting for cache sync")
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
