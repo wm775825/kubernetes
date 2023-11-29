@@ -215,7 +215,7 @@ func CreateKubeAPIServerConfig(opts options.CompletedOptions) (
 ) {
 	proxyTransport := CreateProxyTransport()
 
-	genericConfig, versionedInformers, storageFactory, err := controlplaneapiserver.BuildGenericConfig(
+	genericConfig, versionedInformers, karmadaInformers, storageFactory, err := controlplaneapiserver.BuildGenericConfig(
 		opts.CompletedOptions,
 		[]*runtime.Scheme{legacyscheme.Scheme, extensionsapiserver.Scheme, aggregatorscheme.Scheme},
 		generatedopenapi.GetOpenAPIDefinitions,
@@ -256,6 +256,7 @@ func CreateKubeAPIServerConfig(opts options.CompletedOptions) (
 			ExtendExpiration:            opts.Authentication.ServiceAccounts.ExtendExpiration,
 
 			VersionedInformers: versionedInformers,
+			KarmadaInformers:   karmadaInformers,
 		},
 	}
 

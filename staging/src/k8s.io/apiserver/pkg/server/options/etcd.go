@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 	"github.com/spf13/pflag"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,6 +42,8 @@ import (
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	storagefactory "k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	storagevalue "k8s.io/apiserver/pkg/storage/value"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 )
 
@@ -63,6 +66,9 @@ type EtcdOptions struct {
 	DefaultWatchCacheSize int
 	// WatchCacheSizes represents override to a given resource
 	WatchCacheSizes []string
+
+	// Set EnableFleetStorage to true to enable fleet storage
+	EnableFleetStorage bool
 
 	// SkipHealthEndpoints, when true, causes the Apply methods to not set up health endpoints.
 	// This allows multiple invocations of the Apply methods without duplication of said endpoints.
@@ -173,6 +179,8 @@ func (s *EtcdOptions) AddFlags(fs *pflag.FlagSet) {
 		"disable watch caching for the associated resource; all non-zero values are equivalent and mean "+
 		"to not disable watch caching for that resource")
 
+	fs.BoolVar(&s.EnableFleetStorage, "enable-fleet-storage", s.EnableFleetStorage, "Enable fleet storage, unused now, maybe removed in the future")
+
 	fs.StringVar(&s.StorageConfig.Type, "storage-backend", s.StorageConfig.Type,
 		"The storage backend for persistence. Options: 'etcd3' (default).")
 
@@ -228,11 +236,12 @@ func (s *EtcdOptions) ApplyTo(c *server.Config) error {
 		storageConfigCopy.StorageObjectCountTracker = c.StorageObjectCountTracker
 	}
 
-	return s.ApplyWithStorageFactoryTo(&SimpleStorageFactory{StorageConfig: storageConfigCopy}, c)
+	return s.ApplyWithStorageFactoryTo(&SimpleStorageFactory{StorageConfig: storageConfigCopy}, c, nil, nil, nil)
 }
 
 // ApplyWithStorageFactoryTo mutates the provided server.Config.  It must never mutate the receiver (EtcdOptions).
-func (s *EtcdOptions) ApplyWithStorageFactoryTo(factory serverstorage.StorageFactory, c *server.Config) error {
+func (s *EtcdOptions) ApplyWithStorageFactoryTo(factory serverstorage.StorageFactory, c *server.Config,
+	kubeInformers informers.SharedInformerFactory, karmadaInformers karmadainformers.SharedInformerFactory, restConfig *rest.Config) error {
 	if s == nil {
 		return nil
 	}
@@ -250,7 +259,7 @@ func (s *EtcdOptions) ApplyWithStorageFactoryTo(factory serverstorage.StorageFac
 
 	metrics.SetStorageMonitorGetter(monitorGetter(factory))
 
-	c.RESTOptionsGetter = s.CreateRESTOptionsGetter(factory, c.ResourceTransformers)
+	c.RESTOptionsGetter = s.CreateRESTOptionsGetter(factory, c.ResourceTransformers, kubeInformers, karmadaInformers, restConfig)
 	return nil
 }
 
@@ -276,14 +285,15 @@ func monitorGetter(factory serverstorage.StorageFactory) func() (monitors []metr
 	}
 }
 
-func (s *EtcdOptions) CreateRESTOptionsGetter(factory serverstorage.StorageFactory, resourceTransformers storagevalue.ResourceTransformers) generic.RESTOptionsGetter {
+func (s *EtcdOptions) CreateRESTOptionsGetter(factory serverstorage.StorageFactory, resourceTransformers storagevalue.ResourceTransformers,
+	kubeInformers informers.SharedInformerFactory, karmadaInformers karmadainformers.SharedInformerFactory, restConfig *rest.Config) generic.RESTOptionsGetter {
 	if resourceTransformers != nil {
 		factory = &transformerStorageFactory{
 			delegate:             factory,
 			resourceTransformers: resourceTransformers,
 		}
 	}
-	return &StorageFactoryRestOptionsFactory{Options: *s, StorageFactory: factory}
+	return &StorageFactoryRestOptionsFactory{Options: *s, StorageFactory: factory, KubeInformers: kubeInformers, KarmadaInformers: karmadaInformers, LoopbackConfig: restConfig}
 }
 
 func (s *EtcdOptions) maybeApplyResourceTransformers(c *server.Config) (err error) {
@@ -381,6 +391,10 @@ func (s *EtcdOptions) addEtcdHealthEndpoint(c *server.Config) error {
 type StorageFactoryRestOptionsFactory struct {
 	Options        EtcdOptions
 	StorageFactory serverstorage.StorageFactory
+
+	KubeInformers    informers.SharedInformerFactory
+	KarmadaInformers karmadainformers.SharedInformerFactory
+	LoopbackConfig   *rest.Config
 }
 
 func (f *StorageFactoryRestOptionsFactory) GetRESTOptions(resource schema.GroupResource) (generic.RESTOptions, error) {
@@ -397,6 +411,10 @@ func (f *StorageFactoryRestOptionsFactory) GetRESTOptions(resource schema.GroupR
 		ResourcePrefix:            f.StorageFactory.ResourcePrefix(resource),
 		CountMetricPollPeriod:     f.Options.StorageConfig.CountMetricPollPeriod,
 		StorageObjectCountTracker: f.Options.StorageConfig.StorageObjectCountTracker,
+		KubeInformers:             f.KubeInformers,
+		KarmadaInformers:          f.KarmadaInformers,
+		LoopbackConfig:            f.LoopbackConfig,
+		EnableFleetStorage:        f.Options.EnableFleetStorage,
 	}
 
 	if f.Options.EnableWatchCache {

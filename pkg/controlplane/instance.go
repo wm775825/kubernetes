@@ -75,7 +75,6 @@ import (
 	"k8s.io/component-helpers/apimachinery/lease"
 	"k8s.io/klog/v2"
 	api "k8s.io/kubernetes/pkg/apis/core"
-	flowcontrolv1 "k8s.io/kubernetes/pkg/apis/flowcontrol/v1"
 	flowcontrolv1beta1 "k8s.io/kubernetes/pkg/apis/flowcontrol/v1beta1"
 	flowcontrolv1beta2 "k8s.io/kubernetes/pkg/apis/flowcontrol/v1beta2"
 	flowcontrolv1beta3 "k8s.io/kubernetes/pkg/apis/flowcontrol/v1beta3"
@@ -115,6 +114,8 @@ import (
 	resourcerest "k8s.io/kubernetes/pkg/registry/resource/rest"
 	schedulingrest "k8s.io/kubernetes/pkg/registry/scheduling/rest"
 	storagerest "k8s.io/kubernetes/pkg/registry/storage/rest"
+
+	karmada "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 )
 
 const (
@@ -227,6 +228,7 @@ type ExtraConfig struct {
 	ServiceAccountPublicKeys []interface{}
 
 	VersionedInformers informers.SharedInformerFactory
+	KarmadaInformers   karmada.SharedInformerFactory
 
 	// RepairServicesInterval interval used by the repair loops for
 	// the Services NodePort and ClusterIP resources
@@ -312,7 +314,7 @@ func (c *Config) createEndpointReconciler() reconcilers.EndpointReconciler {
 // Complete fills in any fields not set that are required to have valid data. It's mutating the receiver.
 func (c *Config) Complete() CompletedConfig {
 	cfg := completedConfig{
-		c.GenericConfig.Complete(c.ExtraConfig.VersionedInformers),
+		c.GenericConfig.Complete(c.ExtraConfig.VersionedInformers, c.ExtraConfig.KarmadaInformers),
 		&c.ExtraConfig,
 	}
 
@@ -751,7 +753,7 @@ var (
 		rbacv1.SchemeGroupVersion,
 		storageapiv1.SchemeGroupVersion,
 		schedulingapiv1.SchemeGroupVersion,
-		flowcontrolv1.SchemeGroupVersion,
+		//flowcontrolv1.SchemeGroupVersion,
 	}
 
 	// legacyBetaEnabledByDefaultResources is the list of beta resources we enable.  You may only add to this list
@@ -759,8 +761,8 @@ var (
 	// see https://github.com/kubernetes/enhancements/tree/master/keps/sig-architecture/3136-beta-apis-off-by-default
 	// for more details.
 	legacyBetaEnabledByDefaultResources = []schema.GroupVersionResource{
-		flowcontrolv1beta3.SchemeGroupVersion.WithResource("flowschemas"),                 // deprecate in 1.29, remove in 1.32
-		flowcontrolv1beta3.SchemeGroupVersion.WithResource("prioritylevelconfigurations"), // deprecate in 1.29, remove in 1.32
+		//flowcontrolv1beta3.SchemeGroupVersion.WithResource("flowschemas"),                 // deprecate in 1.29, remove in 1.32
+		//flowcontrolv1beta3.SchemeGroupVersion.WithResource("prioritylevelconfigurations"), // deprecate in 1.29, remove in 1.32
 	}
 	// betaAPIGroupVersionsDisabledByDefault is for all future beta groupVersions.
 	betaAPIGroupVersionsDisabledByDefault = []schema.GroupVersion{
