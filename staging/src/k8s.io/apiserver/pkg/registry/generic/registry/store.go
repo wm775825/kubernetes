@@ -19,10 +19,16 @@ package registry
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
+
+	"k8s.io/klog/v2"
+
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/validation"
@@ -39,6 +45,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/handlers/fieldmanager"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -47,10 +54,9 @@ import (
 	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
 	"k8s.io/apiserver/pkg/util/dryrun"
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
+	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/structured-merge-diff/v4/fieldpath"
-
-	"k8s.io/klog/v2"
 )
 
 // FinishFunc is a function returned by Begin hooks to complete an operation.
@@ -227,6 +233,8 @@ type Store struct {
 	// If set, DestroyFunc has to be implemented in thread-safe way and
 	// be prepared for being called more than once.
 	DestroyFunc func()
+
+	fleetClientset *FleetClientset
 }
 
 // Note: the rest.StandardStorage interface aggregates the common REST verbs
@@ -764,6 +772,14 @@ func newDeleteOptionsFromUpdateOptions(in *metav1.UpdateOptions) *metav1.DeleteO
 
 // Get retrieves the item from storage.
 func (e *Store) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, fmt.Errorf("no request info found from ctx")
+	}
+	if e.fleetClientset != nil && (info.Resource == "pods" || info.Resource == "deployments") {
+		return e.fleetClientset.Get(ctx, name, options)
+	}
+
 	obj := e.NewFunc()
 	key, err := e.KeyFunc(ctx, name)
 	if err != nil {
@@ -1566,6 +1582,35 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 					}
 				})
 			}
+		}
+	}
+
+	if opts.KubeInformers != nil && opts.KarmadaInformers != nil && opts.LoopbackConfig != nil {
+		karmadaLocation, err := url.Parse(opts.LoopbackConfig.Host)
+		if err != nil {
+			return fmt.Errorf("failed to init karmada location: %v", err)
+		}
+		karmadaTransport, err := restclient.TransportFor(opts.LoopbackConfig)
+		if err != nil {
+			return fmt.Errorf("failed to init karmada transport: %v", err)
+		}
+
+		e.fleetClientset = &FleetClientset{
+			clustersLister: func() ([]*clusterv1alpha1.Cluster, error) {
+				return opts.KarmadaInformers.Cluster().V1alpha1().Clusters().Lister().List(labels.Everything())
+			},
+			clusterGetter: func(name string) (*clusterv1alpha1.Cluster, error) {
+				return opts.KarmadaInformers.Cluster().V1alpha1().Clusters().Lister().Get(name)
+			},
+			secretGetter: func(namespace string, name string) (*corev1.Secret, error) {
+				return opts.KubeInformers.Core().V1().Secrets().Lister().Secrets(namespace).Get(name)
+			},
+			karmadaLocation:  karmadaLocation,
+			karmadaTransport: karmadaTransport,
+			codec:            opts.StorageConfig.Codec,
+			NewFunc:          e.NewFunc,
+			NewListFunc:      e.NewListFunc,
+			Versioner:        storage.APIObjectVersioner{},
 		}
 	}
 
