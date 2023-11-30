@@ -86,10 +86,7 @@ func (f *FleetClientSet) Get(ctx context.Context, name string, options *metav1.G
 		if err = decode(f.codec, b, &status); err != nil {
 			return nil, fmt.Errorf("failed to decode status: %v", err)
 		}
-		if apierrors.IsNotFound(&apierrors.StatusError{ErrStatus: status}) {
-			return nil, apierrors.NewNotFound(schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}, resourceName)
-		}
-		return nil, fmt.Errorf(status.Message)
+		return nil, InterpretGetError(&apierrors.StatusError{ErrStatus: status}, schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}, resourceName, "")
 	}
 	objPtr := f.NewFunc()
 	if err = decode(f.codec, b, objPtr); err != nil {
