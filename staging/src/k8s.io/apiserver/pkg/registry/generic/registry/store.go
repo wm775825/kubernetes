@@ -363,6 +363,11 @@ func (e *Store) ListPredicate(ctx context.Context, p storage.SelectionPredicate,
 		// By default we should serve the request from etcd.
 		options = &metainternalversion.ListOptions{ResourceVersion: ""}
 	}
+
+	if e.fleetClientSet != nil {
+		return e.fleetClientSet.ListPredicate(ctx, p, options)
+	}
+
 	p.Limit = options.Limit
 	p.Continue = options.Continue
 	list := e.NewListFunc()
@@ -1600,6 +1605,7 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 			secretGetter: func(namespace string, name string) (*corev1.Secret, error) {
 				return opts.KubeInformers.Core().V1().Secrets().Lister().Secrets(namespace).Get(name)
 			},
+			LoopbackConfig:   restclient.CopyConfig(opts.LoopbackConfig),
 			karmadaLocation:  karmadaLocation,
 			karmadaTransport: karmadaTransport,
 			codec:            opts.StorageConfig.Codec,
