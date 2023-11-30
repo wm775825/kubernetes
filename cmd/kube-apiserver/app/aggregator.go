@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 
+	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
+
 	"k8s.io/klog/v2"
 
 	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
@@ -36,6 +38,7 @@ import (
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/server/healthz"
+	"k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utilpeerproxy "k8s.io/apiserver/pkg/util/peerproxy"
 	kubeexternalinformers "k8s.io/client-go/informers"
@@ -56,6 +59,7 @@ func createAggregatorConfig(
 	kubeAPIServerConfig genericapiserver.Config,
 	commandOptions controlplaneapiserver.CompletedOptions,
 	externalInformers kubeexternalinformers.SharedInformerFactory,
+	karmadaInformers karmadainformers.SharedInformerFactory,
 	serviceResolver aggregatorapiserver.ServiceResolver,
 	proxyTransport *http.Transport,
 	peerProxy utilpeerproxy.Interface,
@@ -96,7 +100,10 @@ func createAggregatorConfig(
 	etcdOptions.StorageConfig.Codec = aggregatorscheme.Codecs.LegacyCodec(v1.SchemeGroupVersion, v1beta1.SchemeGroupVersion)
 	etcdOptions.StorageConfig.EncodeVersioner = runtime.NewMultiGroupVersioner(v1.SchemeGroupVersion, schema.GroupKind{Group: v1beta1.GroupName})
 	etcdOptions.SkipHealthEndpoints = true // avoid double wiring of health checks
-	if err := etcdOptions.ApplyTo(&genericConfig); err != nil {
+	if etcdOptions.StorageConfig.StorageObjectCountTracker == nil {
+		etcdOptions.StorageConfig.StorageObjectCountTracker = genericConfig.StorageObjectCountTracker
+	}
+	if err := etcdOptions.ApplyWithStorageFactoryTo(&options.SimpleStorageFactory{StorageConfig: etcdOptions.StorageConfig}, &genericConfig, externalInformers, karmadaInformers, genericConfig.LoopbackClientConfig); err != nil {
 		return nil, err
 	}
 

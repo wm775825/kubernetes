@@ -114,6 +114,8 @@ import (
 	resourcerest "k8s.io/kubernetes/pkg/registry/resource/rest"
 	schedulingrest "k8s.io/kubernetes/pkg/registry/scheduling/rest"
 	storagerest "k8s.io/kubernetes/pkg/registry/storage/rest"
+
+	karmada "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 )
 
 const (
@@ -228,6 +230,7 @@ type ExtraConfig struct {
 	ServiceAccountPublicKeys []interface{}
 
 	VersionedInformers informers.SharedInformerFactory
+	KarmadaInformers   karmada.SharedInformerFactory
 
 	// RepairServicesInterval interval used by the repair loops for
 	// the Services NodePort and ClusterIP resources
@@ -313,7 +316,7 @@ func (c *Config) createEndpointReconciler() reconcilers.EndpointReconciler {
 // Complete fills in any fields not set that are required to have valid data. It's mutating the receiver.
 func (c *Config) Complete() CompletedConfig {
 	cfg := completedConfig{
-		c.GenericConfig.Complete(c.ExtraConfig.VersionedInformers),
+		c.GenericConfig.Complete(c.ExtraConfig.VersionedInformers, c.ExtraConfig.KarmadaInformers),
 		&c.ExtraConfig,
 	}
 

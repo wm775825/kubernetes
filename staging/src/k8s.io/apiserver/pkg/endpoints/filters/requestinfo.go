@@ -34,7 +34,7 @@ func WithRequestInfo(handler http.Handler, resolver request.RequestInfoResolver)
 			return
 		}
 
-		req = req.WithContext(request.WithRequestInfo(ctx, info))
+		req = req.WithContext(request.WithRequestInfo(request.WithRequest(ctx, req), info))
 
 		handler.ServeHTTP(w, req)
 	})
