@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"net/http"
 	"net/url"
 	"path"
@@ -24,6 +26,74 @@ import (
 const (
 	KarmadaCluster = "karmada"
 )
+
+func (f *FleetClientset) dynamicClientFor(clusterName string) (*dynamic.DynamicClient, error) {
+	restConfig, err := f.restConfigFor(clusterName)
+	if err != nil {
+		return nil, err
+	}
+	return dynamic.NewForConfig(restConfig)
+}
+
+func (f *FleetClientset) restConfigFor(clusterName string) (*rest.Config, error) {
+	if clusterName == KarmadaCluster {
+		return f.LoopbackConfig, nil
+	}
+
+	cluster, err := f.clusterGetter(clusterName)
+	if err != nil {
+		return nil, InterpretGetClusterError(err, clusterName)
+	}
+	apiEndpoint := cluster.Spec.APIEndpoint
+	if apiEndpoint == "" {
+		return nil, fmt.Errorf("the api endpoint of cluster %s is empty", clusterName)
+	}
+
+	if cluster.Spec.SecretRef == nil {
+		return nil, fmt.Errorf("cluster %s does not have a secret", clusterName)
+	}
+
+	secret, err := f.secretGetter(cluster.Spec.SecretRef.Namespace, cluster.Spec.SecretRef.Name)
+	if err != nil {
+		return nil, err
+	}
+	caBundle, found := secret.Data[clusterv1alpha1.SecretCADataKey]
+	if !found {
+		return nil, fmt.Errorf("the CA bundle of cluster %s is empty", clusterName)
+	}
+	token, exists := secret.Data["token"]
+	if !exists {
+		return nil, fmt.Errorf("token not found")
+	}
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(caBundle)
+	tlsConfig := &tls.Config{
+		RootCAs:            caCertPool,
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: cluster.Spec.InsecureSkipTLSVerification,
+	}
+
+	var proxyDialerFn utilnet.DialFunc
+	trans := utilnet.SetTransportDefaults(&http.Transport{
+		DialContext:     proxyDialerFn,
+		TLSClientConfig: tlsConfig,
+	})
+
+	if proxyURL := cluster.Spec.ProxyURL; proxyURL != "" {
+		u, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse url of proxy url %s: %v", proxyURL, err)
+		}
+		trans.Proxy = http.ProxyURL(u)
+		trans.ProxyConnectHeader = ParseProxyHeaders(cluster.Spec.ProxyHeader)
+	}
+
+	return &rest.Config{
+		BearerToken: string(token),
+		Host:        apiEndpoint,
+		Transport:   trans,
+	}, nil
+}
 
 type SecretGetterFunc func(string, string) (*corev1.Secret, error)
 

@@ -1612,6 +1612,7 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 			NewFunc:          e.NewFunc,
 			NewListFunc:      e.NewListFunc,
 			Versioner:        storage.APIObjectVersioner{},
+			LoopbackConfig:   opts.LoopbackConfig,
 		}
 	}
 

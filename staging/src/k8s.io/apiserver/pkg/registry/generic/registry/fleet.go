@@ -3,11 +3,11 @@ package registry
 import (
 	"context"
 	"fmt"
-	"io"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -29,7 +29,7 @@ type FleetClientset struct {
 	clusterGetter  func(string) (*clusterv1alpha1.Cluster, error)
 	clustersLister func() ([]*clusterv1alpha1.Cluster, error)
 	secretGetter   func(string, string) (*corev1.Secret, error)
-	dynamicClient  dynamic.DynamicClient
+	LoopbackConfig *rest.Config
 
 	karmadaLocation  *url.URL
 	karmadaTransport http.RoundTripper
@@ -55,62 +55,93 @@ func (f *FleetClientset) Get(ctx context.Context, name string, options *metav1.G
 		clusterName = info.Clusterspace
 	}
 
-	req, ok := request.RequestFrom(ctx)
-	if !ok {
-		return nil, fmt.Errorf("no http request found from ctx")
-	}
-
-	return f.dynamicClient.Resource(schema.GroupVersionResource{Group: info.APIGroup, Version: info.APIVersion, Resource: info.Resource}).Namespace(info.Namespace).Get(ctx, info.Name, *options)
-
-	location, transport, err := f.location(clusterName)
+	dynamicClient, err := f.dynamicClientFor(clusterName)
 	if err != nil {
 		return nil, err
 	}
-	newURL := constructURLPath(location, info)
-	if req.URL.RawQuery != "" {
-		newURL += "?" + req.URL.RawQuery // todo: parse multi cluster resourceVersion
-	}
+	resourceClient := dynamicClient.Resource(schema.GroupVersionResource{Group: info.APIGroup, Version: info.APIVersion, Resource: info.Resource})
 
-	newReq, err := http.NewRequest(http.MethodGet, newURL, nil)
+	var result *unstructured.Unstructured
+	if info.Namespace != "" && info.Resource != "namespaces" {
+		result, err = resourceClient.Namespace(info.Namespace).Get(ctx, info.Name, *options)
+	} else {
+		result, err = resourceClient.Get(ctx, info.Name, *options)
+	}
 	if err != nil {
 		return nil, err
 	}
-	newReq.Header = req.Header.Clone()
-	newReq.Header.Set("Accept", "application/json")
 
-	resp, err := transport.RoundTrip(newReq)
+	restClient, _ := rest.RESTClientFor(f.LoopbackConfig)
+	r := restClient.Get().AbsPath().VersionedParams().Do(ctx)
+	r.Raw()
+
+	b, err := result.MarshalJSON()
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		status := metav1.Status{}
-		if err = decode(f.codec, b, &status); err != nil {
-			return nil, fmt.Errorf("failed to decode status: %v", err)
-		}
-		return nil, InterpretGetError(&apierrors.StatusError{ErrStatus: status}, schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}, resourceName, "")
-	}
 	objPtr := f.NewFunc()
 	if err = decode(f.codec, b, objPtr); err != nil {
 		return nil, err
 	}
-
 	accessor, err := meta.Accessor(objPtr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata: %v", err)
-	}
-	if err = f.validateMinimumResourceVersion(options.ResourceVersion, accessor.GetResourceVersion()); err != nil {
-		return nil, err
 	}
 	if clusterName != KarmadaCluster {
 		accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
 	}
 	return objPtr, nil
+
+	//location, transport, err := f.location(clusterName)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//newURL := constructURLPath(location, info)
+	//if req.URL.RawQuery != "" {
+	//	newURL += "?" + req.URL.RawQuery // todo: parse multi cluster resourceVersion
+	//}
+	//
+	//newReq, err := http.NewRequest(http.MethodGet, newURL, nil)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//newReq.Header = req.Header.Clone()
+	//newReq.Header.Set("Accept", "application/json")
+	//
+	//resp, err := transport.RoundTrip(newReq)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//defer resp.Body.Close()
+	//
+	//b, err := io.ReadAll(resp.Body)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//if resp.StatusCode != http.StatusOK {
+	//	status := metav1.Status{}
+	//	if err = decode(f.codec, b, &status); err != nil {
+	//		return nil, fmt.Errorf("failed to decode status: %v", err)
+	//	}
+	//	return nil, InterpretGetError(&apierrors.StatusError{ErrStatus: status}, schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}, resourceName, "")
+	//}
+	//objPtr := f.NewFunc()
+	//if err = decode(f.codec, b, objPtr); err != nil {
+	//	return nil, err
+	//}
+	//
+	//accessor, err := meta.Accessor(objPtr)
+	//if err != nil {
+	//	return nil, fmt.Errorf("failed to get metadata: %v", err)
+	//}
+	//if err = f.validateMinimumResourceVersion(options.ResourceVersion, accessor.GetResourceVersion()); err != nil {
+	//	return nil, err
+	//}
+	//if clusterName != KarmadaCluster {
+	//	accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
+	//}
+	//return objPtr, nil
 }
 
 // referenceFieldSelectors contains field selectors that refer to sources
