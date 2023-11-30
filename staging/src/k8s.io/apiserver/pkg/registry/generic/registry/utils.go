@@ -59,10 +59,7 @@ func (f *FleetClientset) location(clusterName string) (*url.URL, http.RoundTripp
 	}
 	cluster, err := f.clusterGetter(clusterName)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil, err
-		}
-		return nil, nil, fmt.Errorf("failed to get cluster %s: %v", clusterName, err)
+		return nil, nil, InterpretGetClusterError(err, clusterName)
 	}
 	tlsConfig, err := GetTlsConfigForCluster(cluster, f.secretGetter)
 	if err != nil {
@@ -72,7 +69,6 @@ func (f *FleetClientset) location(clusterName string) (*url.URL, http.RoundTripp
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get transport of cluster %s: %v", clusterName, err)
 	}
-	location = normalizeLocation(location)
 	secret, err := f.secretGetter(cluster.Spec.SecretRef.Namespace, cluster.Spec.SecretRef.Name)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get secret of cluster %s: %v", clusterName, err)
@@ -81,7 +77,7 @@ func (f *FleetClientset) location(clusterName string) (*url.URL, http.RoundTripp
 	if !exists {
 		return nil, nil, fmt.Errorf("token not found")
 	}
-	return location, transport2.NewBearerAuthRoundTripper(string(token), transport), nil
+	return normalizeLocation(location), transport2.NewBearerAuthRoundTripper(string(token), transport), nil
 }
 
 func decode(codec runtime.Codec, value []byte, objPtr runtime.Object) error {
