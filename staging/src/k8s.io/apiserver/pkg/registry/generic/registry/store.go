@@ -363,6 +363,12 @@ func (e *Store) ListPredicate(ctx context.Context, p storage.SelectionPredicate,
 		// By default we should serve the request from etcd.
 		options = &metainternalversion.ListOptions{ResourceVersion: ""}
 	}
+
+	klog.Infof("wm775825: predicate is %+#v, label selector is %s, field selector is %s", p, p.Label.String(), p.Field.String())
+	//if e.fleetClientset != nil {
+	//	return e.fleetClientset.ListPredicate(ctx, p, options)
+	//}
+
 	p.Limit = options.Limit
 	p.Continue = options.Continue
 	list := e.NewListFunc()

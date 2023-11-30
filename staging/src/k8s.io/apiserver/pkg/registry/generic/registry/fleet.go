@@ -4,14 +4,20 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/dynamic"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -23,6 +29,7 @@ type FleetClientset struct {
 	clusterGetter  func(string) (*clusterv1alpha1.Cluster, error)
 	clustersLister func() ([]*clusterv1alpha1.Cluster, error)
 	secretGetter   func(string, string) (*corev1.Secret, error)
+	dynamicClient  dynamic.DynamicClient
 
 	karmadaLocation  *url.URL
 	karmadaTransport http.RoundTripper
@@ -52,6 +59,8 @@ func (f *FleetClientset) Get(ctx context.Context, name string, options *metav1.G
 	if !ok {
 		return nil, fmt.Errorf("no http request found from ctx")
 	}
+
+	return f.dynamicClient.Resource(schema.GroupVersionResource{Group: info.APIGroup, Version: info.APIVersion, Resource: info.Resource}).Namespace(info.Namespace).Get(ctx, info.Name, *options)
 
 	location, transport, err := f.location(clusterName)
 	if err != nil {
@@ -102,4 +111,80 @@ func (f *FleetClientset) Get(ctx context.Context, name string, options *metav1.G
 		accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
 	}
 	return objPtr, nil
+}
+
+// referenceFieldSelectors contains field selectors that refer to sources
+// collected from k8s.io/kubernetes/pkg/apis/<group>/<version>/conversion.go
+var referenceFieldSelectors = sets.NewString("metadata.name", "metadata.namespace", // common
+	"spec.nodeName", "spec.serviceAccountName", "status.nominatedNodeName", // pod
+	"involvedObject.name", "involvedObject.namespace") // event
+
+func removeClusterNameInReferenceField(fs fields.Selector) fields.Selector {
+	requirements := fs.Requirements()
+	selectors := make([]fields.Selector, 0, len(requirements))
+	for _, require := range requirements {
+		if referenceFieldSelectors.Has(require.Field) {
+			require.Value, _ = ParseNameFromResourceName(require.Value, false)
+		}
+		if require.Operator == selection.NotEquals {
+			selectors = append(selectors, fields.OneTermNotEqualSelector(require.Field, require.Value))
+		} else {
+			selectors = append(selectors, fields.OneTermEqualSelector(require.Field, require.Value))
+		}
+	}
+	return fields.AndSelectors(selectors...)
+}
+
+func listOptions2QueryString(options *metav1.ListOptions) string {
+	values := url.Values{}
+	if options.Limit != 0 {
+		values.Set("limit", strconv.FormatInt(options.Limit, 10))
+	}
+	if len(options.Continue) != 0 {
+		values.Set("continue", options.Continue)
+	}
+	if len(options.LabelSelector) != 0 {
+		values.Set("labelSelector", options.LabelSelector)
+	}
+	if len(options.FieldSelector) != 0 {
+		values.Set("fieldSelector", options.FieldSelector)
+	}
+	if len(options.ResourceVersion) != 0 {
+		values.Set("resourceVersion", options.ResourceVersion)
+	}
+	if len(options.ResourceVersionMatch) != 0 {
+		values.Set("resourceVersionMatch", string(options.ResourceVersionMatch))
+	}
+	if options.Watch {
+		values.Set("watch", "true")
+	}
+	if options.AllowWatchBookmarks {
+		values.Set("allowWatchBookmarks", "true")
+	}
+	if options.TimeoutSeconds != nil {
+		values.Set("timeoutSeconds", strconv.FormatInt(*options.TimeoutSeconds, 10))
+	}
+	if options.SendInitialEvents != nil && *options.SendInitialEvents == true {
+		values.Set("sendInitialEvents", "true")
+	}
+	return values.Encode()
+}
+
+func (f *FleetClientset) ListPredicate(ctx context.Context, p storage.SelectionPredicate, options *metainternalversion.ListOptions) (runtime.Object, error) {
+	// specifying resource version(match) is not allowed when using continue
+	if len(options.Continue) != 0 && (len(options.ResourceVersion)+len(options.ResourceVersionMatch) == 0) {
+		return nil, apierrors.NewBadRequest("specifying resource version(match) is not allowed when using continue")
+	}
+
+	listOptions := &metav1.ListOptions{
+		FieldSelector:        removeClusterNameInReferenceField(p.Field).String(),
+		LabelSelector:        p.Label.String(),
+		Limit:                options.Limit,
+		Continue:             options.Continue,
+		ResourceVersion:      options.ResourceVersion,
+		ResourceVersionMatch: options.ResourceVersionMatch,
+	}
+	_ = listOptions
+
+	return nil, nil
 }
