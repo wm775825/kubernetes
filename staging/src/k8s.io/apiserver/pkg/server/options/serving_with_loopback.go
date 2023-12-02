@@ -19,13 +19,13 @@ package options
 import (
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	certutil "k8s.io/client-go/util/cert"
-
-	"github.com/google/uuid"
 )
 
 type SecureServingOptionsWithLoopback struct {

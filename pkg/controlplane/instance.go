@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"time"
 
+	karmada "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
+
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	admissionregistrationv1alpha1 "k8s.io/api/admissionregistration/v1alpha1"
 	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
@@ -114,8 +116,6 @@ import (
 	resourcerest "k8s.io/kubernetes/pkg/registry/resource/rest"
 	schedulingrest "k8s.io/kubernetes/pkg/registry/scheduling/rest"
 	storagerest "k8s.io/kubernetes/pkg/registry/storage/rest"
-
-	karmada "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 )
 
 const (
