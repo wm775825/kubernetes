@@ -7,9 +7,13 @@ import (
 	"path"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/endpoints/request"
+
+	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 )
 
 const (
@@ -18,10 +22,10 @@ const (
 	ClusterSpaceSeparator = "clusterspace"
 )
 
-func ParseNameFromResourceName(name string, isCompatibleAPI bool) (resourceName string, clusterName string) {
+func ParseNameFromResourceName(name string, isNotCompatibleAPI bool) (resourceName string, clusterName string) {
 	parts := strings.Split(name, ".")
 	if len(parts) < 3 || parts[len(parts)-2] != ClusterSpaceSeparator {
-		if isCompatibleAPI {
+		if isNotCompatibleAPI {
 			return name, ""
 		} else {
 			return name, KarmadaCluster
@@ -73,4 +77,40 @@ func normalizeLocation(location *url.URL) *url.URL {
 		normalized.Scheme = "http"
 	}
 	return normalized
+}
+
+type skipFunc func(string) bool
+
+type unionSkip []skipFunc
+
+func (u unionSkip) skip(cluster string) bool {
+	for _, f := range u {
+		if f(cluster) {
+			return true
+		}
+	}
+	return false
+}
+
+func specifyCluster(specified string) skipFunc {
+	return func(cluster string) bool {
+		if specified != "" {
+			return cluster != specified
+		}
+		return false
+	}
+}
+
+func unready(clusters []*clusterv1alpha1.Cluster) (skipFunc, sets.String) {
+	unreadyClusters := sets.NewString()
+	for _, cluster := range clusters {
+		if !IsClusterReady(&cluster.Status) {
+			unreadyClusters.Insert(cluster.Name)
+		}
+	}
+	return func(cluster string) bool { return unreadyClusters.Has(cluster) }, unreadyClusters
+}
+
+func IsClusterReady(clusterStatus *clusterv1alpha1.ClusterStatus) bool {
+	return meta.IsStatusConditionTrue(clusterStatus.Conditions, clusterv1alpha1.ClusterConditionReady)
 }
