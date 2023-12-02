@@ -1143,7 +1143,7 @@ func getRESTOptionsGetterForSecrets(t testing.TB, test *transformTest) generic.R
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := etcdConfigCopy.ApplyWithStorageFactoryTo(storageFactory, genericConfig); err != nil {
+	if err := etcdConfigCopy.ApplyWithStorageFactoryTo(storageFactory, genericConfig, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

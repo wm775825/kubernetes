@@ -658,7 +658,7 @@ func TestCustomResourceDefaultingOfMetaFields(t *testing.T) {
 	t.Logf("CR created: %#v", returnedFoo.UnstructuredContent())
 
 	// get persisted object
-	RESTOptionsGetter := serveroptions.NewCRDRESTOptionsGetter(*options.RecommendedOptions.Etcd, nil, nil)
+	RESTOptionsGetter := serveroptions.NewCRDRESTOptionsGetter(*options.RecommendedOptions.Etcd, nil, nil, nil, nil, nil)
 	restOptions, err := RESTOptionsGetter.GetRESTOptions(schema.GroupResource{Group: crd.Spec.Group, Resource: crd.Spec.Names.Plural})
 	if err != nil {
 		t.Fatal(err)

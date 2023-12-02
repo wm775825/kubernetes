@@ -26,7 +26,6 @@ import (
 	"sync"
 
 	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
-
 	"k8s.io/klog/v2"
 
 	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"

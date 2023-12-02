@@ -19,6 +19,8 @@ package generic
 import (
 	"time"
 
+	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
@@ -26,8 +28,6 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-
-	karmadainformers "github.com/karmada-io/karmada/pkg/generated/informers/externalversions"
 )
 
 // RESTOptions is set of resource-specific configuration options to generic registries.
@@ -41,10 +41,9 @@ type RESTOptions struct {
 	CountMetricPollPeriod     time.Duration
 	StorageObjectCountTracker flowcontrolrequest.StorageObjectCountTracker
 
-	KubeInformers      informers.SharedInformerFactory
-	KarmadaInformers   karmadainformers.SharedInformerFactory
-	LoopbackConfig     *rest.Config
-	EnableFleetStorage bool
+	KubeInformers    informers.SharedInformerFactory
+	KarmadaInformers karmadainformers.SharedInformerFactory
+	LoopbackConfig   *rest.Config
 }
 
 // Implement RESTOptionsGetter so that RESTOptions can directly be used when available (i.e. tests)
