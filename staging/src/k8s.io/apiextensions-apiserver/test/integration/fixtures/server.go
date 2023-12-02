@@ -155,7 +155,7 @@ func StartDefaultServerWithClientsAndEtcd(t servertesting.Logger, extraFlags ...
 		resourceTransformers = config.ResourceTransformers
 	}
 
-	RESTOptionsGetter := serveroptions.NewCRDRESTOptionsGetter(*options.RecommendedOptions.Etcd, resourceTransformers, nil)
+	RESTOptionsGetter := serveroptions.NewCRDRESTOptionsGetter(*options.RecommendedOptions.Etcd, resourceTransformers, nil, nil, nil, nil)
 	restOptions, err := RESTOptionsGetter.GetRESTOptions(schema.GroupResource{Group: "hopefully-ignored-group", Resource: "hopefully-ignored-resources"})
 	if err != nil {
 		return nil, nil, nil, nil, "", err

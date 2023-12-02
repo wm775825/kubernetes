@@ -68,9 +68,6 @@ type EtcdOptions struct {
 	// WatchCacheSizes represents override to a given resource
 	WatchCacheSizes []string
 
-	// Set EnableFleetStorage to true to enable fleet storage
-	EnableFleetStorage bool
-
 	// SkipHealthEndpoints, when true, causes the Apply methods to not set up health endpoints.
 	// This allows multiple invocations of the Apply methods without duplication of said endpoints.
 	SkipHealthEndpoints bool
@@ -169,8 +166,6 @@ func (s *EtcdOptions) AddFlags(fs *pflag.FlagSet) {
 		"watch-cache is enabled. The only meaningful size setting to supply here is zero, which means to "+
 		"disable watch caching for the associated resource; all non-zero values are equivalent and mean "+
 		"to not disable watch caching for that resource")
-
-	fs.BoolVar(&s.EnableFleetStorage, "enable-fleet-storage", s.EnableFleetStorage, "Enable fleet storage, unused now, maybe removed in the future")
 
 	fs.StringVar(&s.StorageConfig.Type, "storage-backend", s.StorageConfig.Type,
 		"The storage backend for persistence. Options: 'etcd3' (default).")
@@ -284,7 +279,13 @@ func (s *EtcdOptions) CreateRESTOptionsGetter(factory serverstorage.StorageFacto
 			resourceTransformers: resourceTransformers,
 		}
 	}
-	return &StorageFactoryRestOptionsFactory{Options: *s, StorageFactory: factory, KubeInformers: kubeInformers, KarmadaInformers: karmadaInformers, LoopbackConfig: restConfig}
+	return &StorageFactoryRestOptionsFactory{
+		Options:          *s,
+		StorageFactory:   factory,
+		KubeInformers:    kubeInformers,
+		KarmadaInformers: karmadaInformers,
+		LoopbackConfig:   restConfig,
+	}
 }
 
 func (s *EtcdOptions) maybeApplyResourceTransformers(c *server.Config) (err error) {
@@ -399,7 +400,6 @@ func (f *StorageFactoryRestOptionsFactory) GetRESTOptions(resource schema.GroupR
 		KubeInformers:             f.KubeInformers,
 		KarmadaInformers:          f.KarmadaInformers,
 		LoopbackConfig:            f.LoopbackConfig,
-		EnableFleetStorage:        f.Options.EnableFleetStorage,
 	}
 
 	if f.Options.EnableWatchCache {
