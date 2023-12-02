@@ -124,7 +124,6 @@ type RequestInfoFactory struct {
 // /api
 // /healthz
 // /
-// todo: @wm775825 should nonResource paths include clusterspaces?
 func (r *RequestInfoFactory) NewRequestInfo(req *http.Request) (*RequestInfo, error) {
 	// start with a non-resource request until proven otherwise
 	requestInfo := RequestInfo{
@@ -200,22 +199,6 @@ func (r *RequestInfoFactory) NewRequestInfo(req *http.Request) (*RequestInfo, er
 		}
 	} else {
 		requestInfo.Namespace = metav1.NamespaceNone
-	}
-
-	if currentParts[0] == "clusterspaces" {
-		if len(currentParts) > 1 {
-			requestInfo.Clusterspace = currentParts[1]
-
-			// if there is another step after the namespace name and it is not a known namespace subresource
-			// move currentParts to include it as a resource in its own right
-			if len(currentParts) > 2 && !namespaceSubresources.Has(currentParts[2]) {
-				currentParts = currentParts[2:]
-			}
-		} else {
-			return &requestInfo, fmt.Errorf("clusterspace can not be empty if specified in url, %v", req.URL)
-		}
-	} else {
-		requestInfo.Clusterspace = ClusterspaceNone
 	}
 
 	// parsing successful, so we now know the proper value for .Parts

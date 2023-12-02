@@ -496,17 +496,17 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	switch {
 	case !namespaceScoped:
 		// Handle non-namespace scoped resources like nodes.
-		resourcePath := resource // clusters
+		resourcePath := resource
 		resourceParams := params
-		itemPath := resourcePath + "/{name}"         // clusters/{name}
-		nameParams := append(params, nameParam)      // name
-		proxyParams := append(nameParams, pathParam) // name path
+		itemPath := resourcePath + "/{name}"
+		nameParams := append(params, nameParam)
+		proxyParams := append(nameParams, pathParam)
 		suffix := ""
 		if isSubresource {
-			suffix = "/" + subresource   // /proxy
-			itemPath = itemPath + suffix // clusters/{name}/proxy
-			resourcePath = itemPath      // clusters/{name}/proxy
-			resourceParams = nameParams  // name
+			suffix = "/" + subresource
+			itemPath = itemPath + suffix
+			resourcePath = itemPath
+			resourceParams = nameParams
 		}
 		apiResource.Name = path
 		apiResource.Namespaced = false
@@ -537,9 +537,6 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		actions = appendIf(actions, action{"CONNECT", itemPath, nameParams, namer, false}, isConnecter)
 		actions = appendIf(actions, action{"CONNECT", itemPath + "/{path:*}", proxyParams, namer, false}, isConnecter && connectSubpath)
 	default:
-		clusterspaceParamName := "clusterspaces"
-		clusterspaceParam := ws.PathParameter("clusterspace", "cluster name").DataType("string")
-
 		namespaceParamName := "namespaces"
 		// Handler for standard REST verbs (GET, PUT, POST and DELETE).
 		namespaceParam := ws.PathParameter("namespace", "object name and auth scope, such as for teams and projects").DataType("string")
@@ -547,12 +544,9 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		namespaceParams := []*restful.Parameter{namespaceParam}
 
 		resourcePath := namespacedPath
-		resourceParams := namespaceParams      // resourceParams: <namespace>
-		itemPath := namespacedPath + "/{name}" // itemPath: namespaces/{namespace}/resource/{name}
-		// itemWithClusterspacePath: namespaces/{namespace}/clusterspaces/{clusterspace}/resource/{name}
-		itemWithClusterspacePath := namespaceParamName + "/{namespace}/" + clusterspaceParamName + "/{clusterspace}/" + resource + "/{name}"
-		nameParams := append(namespaceParams, nameParam)                    // nameParams: <namespace>、<name>
-		nameWithClusterspaceParams := append(nameParams, clusterspaceParam) // nameWithClusterspaceParams: <namespace>、<clusterspace>、<name>
+		resourceParams := namespaceParams
+		itemPath := namespacedPath + "/{name}"
+		nameParams := append(namespaceParams, nameParam)
 		proxyParams := append(nameParams, pathParam)
 		itemPathSuffix := ""
 		if isSubresource {
@@ -576,7 +570,6 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		actions = appendIf(actions, action{"WATCHLIST", "watch/" + resourcePath, resourceParams, namer, false}, allowWatchList)
 
 		actions = appendIf(actions, action{"GET", itemPath, nameParams, namer, false}, isGetter)
-		actions = appendIf(actions, action{"GET", itemWithClusterspacePath, nameWithClusterspaceParams, namer, false}, isGetter)
 		if getSubpath {
 			actions = appendIf(actions, action{"GET", itemPath + "/{path:*}", proxyParams, namer, false}, isGetter)
 		}
