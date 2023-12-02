@@ -233,7 +233,7 @@ type Store struct {
 	// be prepared for being called more than once.
 	DestroyFunc func()
 
-	fleetClientset *FleetClientset
+	fleetClientSet *FleetClientSet
 }
 
 // Note: the rest.StandardStorage interface aggregates the common REST verbs
@@ -771,8 +771,8 @@ func newDeleteOptionsFromUpdateOptions(in *metav1.UpdateOptions) *metav1.DeleteO
 
 // Get retrieves the item from storage.
 func (e *Store) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
-	if e.fleetClientset != nil {
-		return e.fleetClientset.Get(ctx, name, options)
+	if e.fleetClientSet != nil {
+		return e.fleetClientSet.Get(ctx, name, options)
 	}
 
 	obj := e.NewFunc()
@@ -1590,7 +1590,7 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 			return fmt.Errorf("failed to init karmada transport: %v", err)
 		}
 
-		e.fleetClientset = &FleetClientset{
+		e.fleetClientSet = &FleetClientSet{
 			clustersLister: func() ([]*clusterv1alpha1.Cluster, error) {
 				return opts.KarmadaInformers.Cluster().V1alpha1().Clusters().Lister().List(labels.Everything())
 			},
