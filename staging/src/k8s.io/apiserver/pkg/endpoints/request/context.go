@@ -88,6 +88,6 @@ func WithRequest(parent context.Context, req *http.Request) context.Context {
 
 // RequestFrom returns the value of the request key on the ctx
 func RequestFrom(ctx context.Context) (*http.Request, bool) {
-	user, ok := ctx.Value(requestKey).(*http.Request)
-	return user, ok
+	request, ok := ctx.Value(requestKey).(*http.Request)
+	return request, ok
 }

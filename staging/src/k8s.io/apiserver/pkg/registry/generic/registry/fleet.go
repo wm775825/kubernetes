@@ -4,22 +4,23 @@ import (
 	"context"
 	"fmt"
 	"io"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"net/http"
 	"net/url"
 
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/storage"
+	clientgotransport "k8s.io/client-go/transport"
 )
 
-type FleetClientset struct {
+type FleetClientSet struct {
 	clusterGetter  func(string) (*clusterv1alpha1.Cluster, error)
 	clustersLister func() ([]*clusterv1alpha1.Cluster, error)
 	secretGetter   func(string, string) (*corev1.Secret, error)
@@ -27,13 +28,14 @@ type FleetClientset struct {
 	karmadaLocation  *url.URL
 	karmadaTransport http.RoundTripper
 
-	codec       runtime.Codec
+	codec runtime.Codec
+
 	NewFunc     func() runtime.Object
 	NewListFunc func() runtime.Object
 	Versioner   storage.APIObjectVersioner
 }
 
-func (f *FleetClientset) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+func (f *FleetClientSet) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
 	info, ok := request.RequestInfoFrom(ctx)
 	if !ok {
 		return nil, fmt.Errorf("no request info found from ctx")
@@ -105,4 +107,55 @@ func (f *FleetClientset) Get(ctx context.Context, name string, options *metav1.G
 		accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
 	}
 	return objPtr, nil
+}
+
+func (f *FleetClientSet) validateMinimumResourceVersion(minimumResourceVersion, actualResourceVersion string) error {
+	if minimumResourceVersion == "" {
+		return nil
+	}
+	minimumRV, err := f.Versioner.ParseResourceVersion(minimumResourceVersion)
+	if err != nil {
+		return apierrors.NewBadRequest(fmt.Sprintf("invalid resource version: %v", err))
+	}
+	actualRV, err := f.Versioner.ParseResourceVersion(actualResourceVersion)
+	if err != nil {
+		return apierrors.NewInternalError(fmt.Errorf("invalid resource version: %v", err))
+	}
+	// Enforce the storage.Interface guarantee that the resource version of the returned data
+	// "will be at least 'resourceVersion'".
+	if minimumRV > actualRV {
+		return storage.NewTooLargeResourceVersionError(minimumRV, actualRV, 0)
+	}
+	return nil
+}
+
+func (f *FleetClientSet) location(clusterName string) (*url.URL, http.RoundTripper, error) {
+	if clusterName == KarmadaCluster {
+		return f.karmadaLocation, f.karmadaTransport, nil
+	}
+	cluster, err := f.clusterGetter(clusterName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil, err
+		}
+		return nil, nil, fmt.Errorf("failed to get cluster %s: %v", clusterName, err)
+	}
+	tlsConfig, err := GetTlsConfigForCluster(cluster, f.secretGetter)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get tls config for cluster %s: %v", clusterName, err)
+	}
+	location, transport, err := Location(cluster, tlsConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get transport of cluster %s: %v", clusterName, err)
+	}
+	location = normalizeLocation(location)
+	secret, err := f.secretGetter(cluster.Spec.SecretRef.Namespace, cluster.Spec.SecretRef.Name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get secret of cluster %s: %v", clusterName, err)
+	}
+	token, exists := secret.Data["token"]
+	if !exists {
+		return nil, nil, fmt.Errorf("token not found")
+	}
+	return location, clientgotransport.NewBearerAuthRoundTripper(string(token), transport), nil
 }

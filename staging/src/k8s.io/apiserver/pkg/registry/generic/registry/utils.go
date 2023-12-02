@@ -12,26 +12,24 @@ import (
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/apiserver/pkg/storage"
-	transport2 "k8s.io/client-go/transport"
 )
 
 const (
 	KarmadaCluster = "karmada"
+
+	ClusterSpaceSeparator = "clusterspace"
 )
 
 type SecretGetterFunc func(string, string) (*corev1.Secret, error)
 
-func ParseNameFromResourceName(name string, clusterExistsInPath bool) (resourceName string, clusterName string) {
-	// member cluster or karmada
+func ParseNameFromResourceName(name string, isCompatibleAPI bool) (resourceName string, clusterName string) {
 	parts := strings.Split(name, ".")
-	if len(parts) < 3 || parts[len(parts)-2] != "clusterspace" {
-		if clusterExistsInPath {
+	if len(parts) < 3 || parts[len(parts)-2] != ClusterSpaceSeparator {
+		if isCompatibleAPI {
 			return name, ""
 		} else {
 			return name, KarmadaCluster
@@ -53,37 +51,6 @@ func constructURLPath(location *url.URL, info *request.RequestInfo) string {
 	return location.String() + path.Join(parts...)
 }
 
-func (f *FleetClientset) location(clusterName string) (*url.URL, http.RoundTripper, error) {
-	if clusterName == KarmadaCluster {
-		return f.karmadaLocation, f.karmadaTransport, nil
-	}
-	cluster, err := f.clusterGetter(clusterName)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil, err
-		}
-		return nil, nil, fmt.Errorf("failed to get cluster %s: %v", clusterName, err)
-	}
-	tlsConfig, err := GetTlsConfigForCluster(cluster, f.secretGetter)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get tls config for cluster %s: %v", clusterName, err)
-	}
-	location, transport, err := Location(cluster, tlsConfig)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get transport of cluster %s: %v", clusterName, err)
-	}
-	location = normalizeLocation(location)
-	secret, err := f.secretGetter(cluster.Spec.SecretRef.Namespace, cluster.Spec.SecretRef.Name)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get secret of cluster %s: %v", clusterName, err)
-	}
-	token, exists := secret.Data["token"]
-	if !exists {
-		return nil, nil, fmt.Errorf("token not found")
-	}
-	return location, transport2.NewBearerAuthRoundTripper(string(token), transport), nil
-}
-
 func decode(codec runtime.Codec, value []byte, objPtr runtime.Object) error {
 	if _, err := conversion.EnforcePtr(objPtr); err != nil {
 		return fmt.Errorf("unable to convert output object to pointer: %v", err)
@@ -91,26 +58,6 @@ func decode(codec runtime.Codec, value []byte, objPtr runtime.Object) error {
 	_, _, err := codec.Decode(value, nil, objPtr)
 	if err != nil {
 		return err
-	}
-	return nil
-}
-
-func (f *FleetClientset) validateMinimumResourceVersion(minimumResourceVersion, actualResourceVersion string) error {
-	if minimumResourceVersion == "" {
-		return nil
-	}
-	minimumRV, err := f.Versioner.ParseResourceVersion(minimumResourceVersion)
-	if err != nil {
-		return apierrors.NewBadRequest(fmt.Sprintf("invalid resource version: %v", err))
-	}
-	actualRV, err := f.Versioner.ParseResourceVersion(actualResourceVersion)
-	if err != nil {
-		return apierrors.NewInternalError(fmt.Errorf("invalid resource version: %v", err))
-	}
-	// Enforce the storage.Interface guarantee that the resource version of the returned data
-	// "will be at least 'resourceVersion'".
-	if minimumRV > actualRV {
-		return storage.NewTooLargeResourceVersionError(minimumRV, actualRV, 0)
 	}
 	return nil
 }
