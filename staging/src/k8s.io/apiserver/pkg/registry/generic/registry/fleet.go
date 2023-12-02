@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/warning"
@@ -502,4 +504,118 @@ func (f *FleetClientSet) restConfigFor(clusterName string) (*rest.Config, error)
 		Host:        apiEndpoint,
 		Transport:   trans,
 	}, nil
+}
+
+func (f *FleetClientSet) WatchPredicate(ctx context.Context, p storage.SelectionPredicate, resourceVersion string, sendInitialEvents *bool) (watch.Interface, error) {
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, fmt.Errorf("no request info found from ctx")
+	}
+
+	fs, specifiedCluster, err := removeClusterNameInReferenceField(p.Field)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := &metav1.ListOptions{
+		Watch:               true,
+		FieldSelector:       fs.String(),
+		LabelSelector:       p.Label.String(), // todo: @wm775825 wo do not know how to parse cluster name from labels
+		SendInitialEvents:   sendInitialEvents,
+		AllowWatchBookmarks: p.AllowWatchBookmarks,
+	}
+	if opts.SendInitialEvents != nil && *opts.SendInitialEvents {
+		opts.ResourceVersionMatch = metav1.ResourceVersionMatchNotOlderThan
+	}
+
+	mrv := newMultiClusterResourceVersionFromString(resourceVersion)
+	responseRV := newMultiClusterResourceVersionFromString(resourceVersion)
+	responseRVLock := sync.Mutex{}
+	setObjectRVFunc := func(cluster string, event *watch.Event) {
+		if event == nil {
+			return
+		}
+		b, err := json.Marshal(event.Object)
+		if err != nil {
+			return
+		}
+
+		if event.Type == watch.Error {
+			obj := &metav1.Status{}
+			if err = decode(f.codec, b, obj); err != nil {
+				status := apierrors.NewInternalError(fmt.Errorf("failed to decode error event into status: %v", err)).Status()
+				obj = &status
+			}
+			event.Object = obj
+			return
+		}
+
+		obj := f.NewFunc()
+		if err = decode(f.codec, b, obj); err != nil {
+			status := apierrors.NewInternalError(fmt.Errorf("failed to decode event into versioned object: %v", err)).Status()
+			event.Object = &status
+			return
+		}
+		event.Object = obj
+
+		accessor, err := meta.Accessor(obj)
+		if err != nil {
+			return
+		}
+		if cluster != KarmadaCluster {
+			accessor.SetName(accessor.GetName() + ".clusterspace." + cluster)
+		}
+
+		responseRVLock.Lock()
+		defer responseRVLock.Unlock()
+		responseRV.set(cluster, accessor.GetResourceVersion())
+		accessor.SetResourceVersion(responseRV.String())
+	}
+
+	clusters, err := f.clustersLister()
+	if err != nil {
+		return nil, err
+	}
+	skipUnready, unreadyClusters := unready(clusters)
+	if unreadyClusters.Len() != 0 {
+		warning.AddWarning(ctx, "fleet-apiserver", fmt.Sprintf("skip watch from following clusters [%s] since cluster not ready", strings.Join(unreadyClusters.List(), ",")))
+	}
+	shouldSkipWatch := unionSkip{specifyCluster(specifiedCluster), skipUnready}
+	// Since karmada-metrics-adapter may collect metrics from member clusters, we skip karmada to avoid watch duplicate metrics.
+	if info.APIGroup != metrics.GroupName {
+		clusters = append(clusters, &clusterv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: KarmadaCluster}})
+	}
+
+	watcher := newWatchMux()
+	for _, cluster := range clusters {
+		name := cluster.Name
+		if shouldSkipWatch.skip(name) {
+			continue
+		}
+
+		opts.ResourceVersion = mrv.get(name)
+		w, err := f.watcherFor(ctx, name, info, *opts)
+		if err != nil {
+			return nil, err
+		}
+		watcher.AddSource(w, func(event *watch.Event) {
+			setObjectRVFunc(name, event)
+		})
+	}
+	watcher.Start()
+	return watcher, nil
+}
+
+func (f *FleetClientSet) watcherFor(ctx context.Context, clusterName string, info *request.RequestInfo, opts metav1.ListOptions) (w watch.Interface, err error) {
+	client, err := f.dynamicClientFor(clusterName)
+	if err != nil {
+		return nil, err
+	}
+	resourceClient := client.Resource(schema.GroupVersionResource{Group: info.APIGroup, Version: info.APIVersion, Resource: info.Resource})
+	if info.Namespace != "" && info.Resource != "namespaces" {
+		w, err = resourceClient.Namespace(info.Namespace).Watch(ctx, opts)
+	} else {
+		w, err = resourceClient.Watch(ctx, opts)
+	}
+	return
 }
