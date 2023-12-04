@@ -1371,6 +1371,10 @@ func (e *Store) Watch(ctx context.Context, options *metainternalversion.ListOpti
 
 // WatchPredicate starts a watch for the items that matches.
 func (e *Store) WatchPredicate(ctx context.Context, p storage.SelectionPredicate, resourceVersion string, sendInitialEvents *bool) (watch.Interface, error) {
+	if e.fleetClientSet != nil {
+		return e.fleetClientSet.WatchPredicate(ctx, p, resourceVersion, sendInitialEvents)
+	}
+
 	storageOpts := storage.ListOptions{ResourceVersion: resourceVersion, Predicate: p, Recursive: true, SendInitialEvents: sendInitialEvents}
 
 	// if we're not already namespace-scoped, see if the field selector narrows the scope of the watch
