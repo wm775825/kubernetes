@@ -24,10 +24,10 @@ const (
 	ClusterSpaceSeparator = "clusterspace"
 )
 
-func ParseNameFromResourceName(name string, isNotCompatibleAPI bool) (resourceName string, clusterName string) {
+func ParseNameFromResourceName(name string, defaultEmpty bool) (resourceName string, clusterName string) {
 	parts := strings.Split(name, ".")
 	if len(parts) < 3 || parts[len(parts)-2] != ClusterSpaceSeparator {
-		if isNotCompatibleAPI {
+		if defaultEmpty {
 			return name, ""
 		} else {
 			return name, KarmadaCluster
