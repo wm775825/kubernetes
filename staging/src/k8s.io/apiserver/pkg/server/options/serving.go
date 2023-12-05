@@ -80,6 +80,12 @@ type SecureServingOptions struct {
 
 	// LoopbackConfigFile is the file path of loopback config, which content is in kube-config format.
 	LoopbackConfigFile string
+
+	// LoopbackServerOverride overrides address of loopback server
+	LoopbackServerOverride string
+
+	// LoopbackInsecureSkipTLSVerify overrides tls verify
+	LoopbackInsecureSkipTLSVerifyOverride bool
 }
 
 type CertKey struct {
@@ -220,6 +226,10 @@ func (s *SecureServingOptions) AddFlags(fs *pflag.FlagSet) {
 
 	fs.StringVar(&s.LoopbackConfigFile, "loopback-config-file", s.LoopbackConfigFile,
 		"File containing kube-config used by loopback")
+	fs.StringVar(&s.LoopbackServerOverride, "loopback-server-override", s.LoopbackServerOverride,
+		"Override server address of loopback config")
+	fs.BoolVar(&s.LoopbackInsecureSkipTLSVerifyOverride, "loopback-insecure-skip-tls-verify-override", s.LoopbackInsecureSkipTLSVerifyOverride,
+		"Override insecure-skip-tls-verify of loopback config")
 }
 
 // ApplyTo fills up serving information in the server configuration.
