@@ -20,6 +20,7 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -151,6 +152,29 @@ func LoadKubeconfig(kubeConfigFile string, customDial utilnet.DialFunc) (*rest.C
 	clientConfig, err := loader.ClientConfig()
 	if err != nil {
 		return nil, err
+	}
+
+	// load tls configuration immediately
+	if clientConfig.CAFile != "" && len(clientConfig.CAData) == 0 {
+		caData, err := os.ReadFile(clientConfig.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		clientConfig.CAData = caData
+	}
+	if clientConfig.CertFile != "" && len(clientConfig.CertData) == 0 {
+		certData, err := os.ReadFile(clientConfig.CertFile)
+		if err != nil {
+			return nil, err
+		}
+		clientConfig.CertData = certData
+	}
+	if clientConfig.KeyFile != "" && len(clientConfig.KeyData) == 0 {
+		keyData, err := os.ReadFile(clientConfig.KeyFile)
+		if err != nil {
+			return nil, err
+		}
+		clientConfig.KeyData = keyData
 	}
 
 	clientConfig.Dial = customDial
