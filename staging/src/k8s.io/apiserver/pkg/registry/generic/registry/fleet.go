@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	goerrors "errors"
 	"fmt"
 	"io"
 	"math"
@@ -21,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -422,6 +424,18 @@ func (f *FleetClientSet) validateMinimumResourceVersion(minimumResourceVersion, 
 	return nil
 }
 
+func (f *FleetClientSet) resourceClientFor(clusterName string, info *request.RequestInfo, namespace string) (dynamic.ResourceInterface, error) {
+	client, err := f.dynamicClientFor(clusterName)
+	if err != nil {
+		return nil, err
+	}
+	resourceClient := client.Resource(schema.GroupVersionResource{Group: info.APIGroup, Version: info.APIVersion, Resource: info.Resource})
+	if namespace != "" && info.Resource != "namespaces" {
+		return resourceClient.Namespace(namespace), nil
+	}
+	return resourceClient, nil
+}
+
 func (f *FleetClientSet) dynamicClientFor(clusterName string) (*dynamic.DynamicClient, error) {
 	restConfig, err := f.restConfigFor(clusterName)
 	if err != nil {
@@ -607,15 +621,55 @@ func (f *FleetClientSet) WatchPredicate(ctx context.Context, p storage.Selection
 }
 
 func (f *FleetClientSet) watcherFor(ctx context.Context, clusterName string, info *request.RequestInfo, opts metav1.ListOptions) (w watch.Interface, err error) {
-	client, err := f.dynamicClientFor(clusterName)
+	client, err := f.resourceClientFor(clusterName, info, info.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	resourceClient := client.Resource(schema.GroupVersionResource{Group: info.APIGroup, Version: info.APIVersion, Resource: info.Resource})
-	if info.Namespace != "" && info.Resource != "namespaces" {
-		w, err = resourceClient.Namespace(info.Namespace).Watch(ctx, opts)
-	} else {
-		w, err = resourceClient.Watch(ctx, opts)
+	return client.Watch(ctx, opts)
+}
+
+func (f *FleetClientSet) Create(ctx context.Context, obj runtime.Object, options *metav1.CreateOptions) (runtime.Object, error) {
+	o, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil, apierrors.NewInternalError(goerrors.New("failed to convert object to *unstructured.Unstructured"))
 	}
-	return
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewInternalError(goerrors.New("no request info found from ctx"))
+	}
+	ns, ok := request.NamespaceFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewInternalError(goerrors.New("failed to get namespace from context"))
+	}
+
+	resourceName, clusterName := ParseNameFromResourceName(o.GetName(), false)
+	client, err := f.resourceClientFor(clusterName, info, ns)
+	if err != nil {
+		return nil, apierrors.NewInternalError(fmt.Errorf("failed to init resource client: %v", err))
+	}
+	o.SetName(resourceName)
+	ret, err := client.Create(ctx, o, *options, append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
+	if err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(ret)
+	if err != nil {
+		return nil, err
+	}
+
+	retObj := f.NewFunc()
+	if err = decode(f.codec, b, retObj); err != nil {
+		return nil, err
+	}
+	accessor, err := meta.Accessor(retObj)
+	if err != nil {
+		return nil, err
+	}
+	if clusterName != KarmadaCluster {
+		accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
+	}
+	mrv := newMultiClusterResourceVersionWithCapacity(1)
+	mrv.set(clusterName, accessor.GetResourceVersion())
+	accessor.SetResourceVersion(mrv.String())
+	return retObj, nil
 }

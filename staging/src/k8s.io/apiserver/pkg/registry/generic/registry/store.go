@@ -409,6 +409,10 @@ func finishNothing(context.Context, bool) {}
 // hooks).  Tests which call this might want to call DeepCopy if they expect to
 // be able to examine the input and output objects for differences.
 func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
+	if e.fleetClientSet != nil {
+		return e.fleetClientSet.Create(ctx, obj, options)
+	}
+
 	var finishCreate FinishFunc = finishNothing
 
 	// Init metadata as early as possible.
