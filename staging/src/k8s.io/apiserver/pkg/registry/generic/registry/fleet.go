@@ -91,12 +91,7 @@ func (f *FleetClientSet) Get(ctx context.Context, name string, options *metav1.G
 	if err = f.validateMinimumResourceVersion(options.ResourceVersion, accessor.GetResourceVersion()); err != nil {
 		return nil, err
 	}
-	if clusterName != KarmadaCluster {
-		accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
-	}
-	mrv := newMultiClusterResourceVersionWithCapacity(1)
-	mrv.set(clusterName, accessor.GetResourceVersion())
-	accessor.SetResourceVersion(mrv.String())
+	setNameAndResourceVersion(accessor, clusterName)
 	return objPtr, nil
 }
 
@@ -218,9 +213,7 @@ func (f *FleetClientSet) ListPredicate(ctx context.Context, p storage.SelectionP
 			if err != nil {
 				return err
 			}
-			if clusterName != KarmadaCluster {
-				accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
-			}
+			setName(accessor, clusterName)
 			accessor.SetResourceVersion(responseRV.String())
 
 			items = append(items, clone)
@@ -551,9 +544,7 @@ func (f *FleetClientSet) WatchPredicate(ctx context.Context, p storage.Selection
 		if err != nil {
 			return
 		}
-		if cluster != KarmadaCluster {
-			accessor.SetName(accessor.GetName() + ".clusterspace." + cluster)
-		}
+		setName(accessor, cluster)
 
 		responseRVLock.Lock()
 		defer responseRVLock.Unlock()
@@ -640,11 +631,6 @@ func (f *FleetClientSet) Create(ctx context.Context, obj runtime.Object, options
 	if err != nil {
 		return nil, err
 	}
-	if clusterName != KarmadaCluster {
-		accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
-	}
-	mrv := newMultiClusterResourceVersionWithCapacity(1)
-	mrv.set(clusterName, accessor.GetResourceVersion())
-	accessor.SetResourceVersion(mrv.String())
+	setNameAndResourceVersion(accessor, clusterName)
 	return retObj, nil
 }
