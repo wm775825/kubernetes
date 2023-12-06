@@ -234,6 +234,8 @@ type Store struct {
 	DestroyFunc func()
 
 	fleetClientSet *FleetClientSet
+
+	FleetDecorator func(runtime.Object)
 }
 
 // Note: the rest.StandardStorage interface aggregates the common REST verbs
@@ -365,7 +367,14 @@ func (e *Store) ListPredicate(ctx context.Context, p storage.SelectionPredicate,
 	}
 
 	if e.fleetClientSet != nil {
-		return e.fleetClientSet.ListPredicate(ctx, p, options)
+		obj, err := e.fleetClientSet.ListPredicate(ctx, p, options)
+		if err != nil {
+			return nil, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(obj)
+		}
+		return obj, nil
 	}
 
 	p.Limit = options.Limit
@@ -410,7 +419,14 @@ func finishNothing(context.Context, bool) {}
 // be able to examine the input and output objects for differences.
 func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
 	if e.fleetClientSet != nil {
-		return e.fleetClientSet.Create(ctx, obj, options)
+		ret, err := e.fleetClientSet.Create(ctx, obj, options)
+		if err != nil {
+			return nil, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(ret)
+		}
+		return ret, nil
 	}
 
 	var finishCreate FinishFunc = finishNothing
@@ -554,7 +570,14 @@ func (e *Store) deleteWithoutFinalizers(ctx context.Context, name, key string, o
 // A bool is returned along with the object and any errors, to indicate object creation.
 func (e *Store) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
 	if e.fleetClientSet != nil {
-		return e.fleetClientSet.Update(ctx, objInfo, options)
+		obj, b, err := e.fleetClientSet.Update(ctx, objInfo, options)
+		if err != nil {
+			return nil, false, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(obj)
+		}
+		return obj, b, nil
 	}
 
 	key, err := e.KeyFunc(ctx, name)
@@ -785,7 +808,14 @@ func newDeleteOptionsFromUpdateOptions(in *metav1.UpdateOptions) *metav1.DeleteO
 // Get retrieves the item from storage.
 func (e *Store) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
 	if e.fleetClientSet != nil {
-		return e.fleetClientSet.Get(ctx, name, options)
+		obj, err := e.fleetClientSet.Get(ctx, name, options)
+		if err != nil {
+			return nil, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(obj)
+		}
+		return obj, nil
 	}
 
 	obj := e.NewFunc()
@@ -1073,7 +1103,14 @@ func (e *Store) updateForGracefulDeletionAndFinalizers(ctx context.Context, name
 // options can be mutated by rest.BeforeDelete due to a graceful deletion strategy.
 func (e *Store) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
 	if e.fleetClientSet != nil {
-		return e.fleetClientSet.Delete(ctx, name, options)
+		obj, b, err := e.fleetClientSet.Delete(ctx, name, options)
+		if err != nil {
+			return nil, false, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(obj)
+		}
+		return obj, b, nil
 	}
 
 	key, err := e.KeyFunc(ctx, name)
@@ -1384,7 +1421,14 @@ func (e *Store) Watch(ctx context.Context, options *metainternalversion.ListOpti
 // WatchPredicate starts a watch for the items that matches.
 func (e *Store) WatchPredicate(ctx context.Context, p storage.SelectionPredicate, resourceVersion string, sendInitialEvents *bool) (watch.Interface, error) {
 	if e.fleetClientSet != nil {
-		return e.fleetClientSet.WatchPredicate(ctx, p, resourceVersion, sendInitialEvents)
+		w, err := e.fleetClientSet.WatchPredicate(ctx, p, resourceVersion, sendInitialEvents)
+		if err != nil {
+			return nil, err
+		}
+		if e.FleetDecorator != nil {
+			return newDecoratedWatcher(ctx, w, e.FleetDecorator), nil
+		}
+		return w, nil
 	}
 
 	storageOpts := storage.ListOptions{ResourceVersion: resourceVersion, Predicate: p, Recursive: true, SendInitialEvents: sendInitialEvents}

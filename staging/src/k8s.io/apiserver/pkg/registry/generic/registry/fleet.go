@@ -764,7 +764,7 @@ func (f *FleetClientSet) Update(ctx context.Context, objInfo rest.UpdatedObjectI
 			ret, err = client.Patch(ctx, resourceName, types.PatchType(pt), patchObj.GetPatched(), *createToPatchOptions(options))
 		}
 		if err != nil {
-			klog.Errorf("failed to update: %v", err)
+			klog.Errorf("failed to patch: %v", err)
 			return nil, false, err
 		}
 	default:
