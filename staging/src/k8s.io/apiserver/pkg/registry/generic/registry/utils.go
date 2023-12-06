@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,11 +10,13 @@ import (
 	"sync"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metainternalversionscheme "k8s.io/apimachinery/pkg/apis/meta/internalversion/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/endpoints/handlers/negotiation"
 	"k8s.io/apiserver/pkg/endpoints/request"
 
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
@@ -238,4 +241,17 @@ func setResourceVersion(accessor metav1.Object, clusterName string) {
 	mrv := newMultiClusterResourceVersionWithCapacity(1)
 	mrv.set(clusterName, accessor.GetResourceVersion())
 	accessor.SetResourceVersion(mrv.String())
+}
+
+func encodeMetav1OptionsIntoJsonBytes(options runtime.Object, kind string) ([]byte, error) {
+	serializer, err := negotiation.NegotiateInputSerializerForMediaType("application/json", false, metainternalversionscheme.Codecs)
+	if err != nil {
+		return nil, err
+	}
+	buf := &bytes.Buffer{}
+	gvk := metav1.SchemeGroupVersion.WithKind(kind)
+	if err = metainternalversionscheme.Codecs.EncoderForVersion(serializer.Serializer, gvk.GroupVersion()).Encode(options, buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

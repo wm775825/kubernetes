@@ -45,6 +45,90 @@ import (
 	"k8s.io/component-base/tracing"
 )
 
+func FleetDeleteResource(r rest.GracefulDeleter, allowsOptions bool, scope *RequestScope, admit admission.Interface) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		ctx := req.Context()
+		namespace, name, err := scope.Namer.Name(req)
+		if err != nil {
+			scope.err(err, w, req)
+			return
+		}
+		// enforce a timeout of at most requestTimeoutUpperBound (34s) or less if the user-provided
+		// timeout inside the parent context is lower than requestTimeoutUpperBound.
+		ctx, cancel := context.WithTimeout(ctx, requestTimeoutUpperBound)
+		defer cancel()
+
+		ctx = request.WithNamespace(ctx, namespace)
+
+		outputMediaType, _, err := negotiation.NegotiateOutputMediaType(req, scope.Serializer, scope)
+		if err != nil {
+			scope.err(err, w, req)
+			return
+		}
+
+		options := &metav1.DeleteOptions{}
+		if allowsOptions {
+			body, err := limitedReadBodyWithRecordMetric(ctx, req, scope.MaxRequestBodyBytes, scope.Resource.GroupResource().String(), requestmetrics.Delete)
+			if err != nil {
+				scope.err(err, w, req)
+				return
+			}
+			if len(body) > 0 {
+				s, err := negotiation.NegotiateInputSerializer(req, false, metainternalversionscheme.Codecs)
+				if err != nil {
+					scope.err(err, w, req)
+					return
+				}
+				// For backwards compatibility, we need to allow existing clients to submit per group DeleteOptions
+				// It is also allowed to pass a body with meta.k8s.io/v1.DeleteOptions
+				defaultGVK := scope.MetaGroupVersion.WithKind("DeleteOptions")
+				obj, _, err := metainternalversionscheme.Codecs.DecoderToVersion(s.Serializer, defaultGVK.GroupVersion()).Decode(body, &defaultGVK, options)
+				if err != nil {
+					scope.err(err, w, req)
+					return
+				}
+				if obj != options {
+					scope.err(fmt.Errorf("decoded object cannot be converted to DeleteOptions"), w, req)
+					return
+				}
+			} else {
+				if err := metainternalversionscheme.ParameterCodec.DecodeParameters(req.URL.Query(), scope.MetaGroupVersion, options); err != nil {
+					err = errors.NewBadRequest(err.Error())
+					scope.err(err, w, req)
+					return
+				}
+			}
+		}
+		if errs := validation.ValidateDeleteOptions(options); len(errs) > 0 {
+			err := errors.NewInvalid(schema.GroupKind{Group: metav1.GroupName, Kind: "DeleteOptions"}, "", errs)
+			scope.err(err, w, req)
+			return
+		}
+		options.TypeMeta.SetGroupVersionKind(metav1.SchemeGroupVersion.WithKind("DeleteOptions"))
+
+		result, _, err := r.Delete(ctx, name, nil, options)
+		if err != nil {
+			scope.err(err, w, req)
+			return
+		}
+		status := http.StatusOK
+		// if the rest.Deleter returns a nil object, fill out a status. Callers may return a valid
+		// object with the response.
+		if result == nil {
+			result = &metav1.Status{
+				Status: metav1.StatusSuccess,
+				Code:   int32(status),
+				Details: &metav1.StatusDetails{
+					Name: name,
+					Kind: scope.Kind.Kind,
+				},
+			}
+		}
+
+		transformResponseObject(ctx, scope, req, w, status, outputMediaType, result)
+	}
+}
+
 // DeleteResource returns a function that will handle a resource deletion
 // TODO admission here becomes solely validating admission
 func DeleteResource(r rest.GracefulDeleter, allowsOptions bool, scope *RequestScope, admit admission.Interface) http.HandlerFunc {

@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/rest"
 	transport2 "k8s.io/client-go/transport"
 	"k8s.io/metrics/pkg/apis/metrics"
+	"k8s.io/utils/pointer"
 )
 
 type FleetClientSet struct {
@@ -71,7 +72,12 @@ func (f *FleetClientSet) Get(ctx context.Context, name string, options *metav1.G
 	if err != nil {
 		return nil, err
 	}
-	obj, err := client.Get(ctx, resourceName, *options, append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
+	var obj *unstructured.Unstructured
+	if len(info.Subresource) != 0 {
+		obj, err = client.Get(ctx, resourceName, *options, append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
+	} else {
+		obj, err = client.Get(ctx, resourceName, *options)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -428,6 +434,18 @@ func (f *FleetClientSet) location(clusterName string) (*url.URL, http.RoundTripp
 	return normalizeLocation(location), transport2.NewBearerAuthRoundTripper(restConfig.BearerToken, restConfig.Transport), nil
 }
 
+// restClientFor return rest client in the dynamicClient
+func (f *FleetClientSet) restClientFor(clusterName string) (*rest.RESTClient, error) {
+	config, err := f.restConfigFor(clusterName)
+	if err != nil {
+		return nil, err
+	}
+	config = dynamic.ConfigFor(config)
+	config.GroupVersion = &schema.GroupVersion{}
+	config.APIPath = "/"
+	return rest.RESTClientFor(config)
+}
+
 func (f *FleetClientSet) restConfigFor(clusterName string) (*rest.Config, error) {
 	if clusterName == KarmadaCluster {
 		return f.LoopbackConfig, nil
@@ -614,7 +632,13 @@ func (f *FleetClientSet) Create(ctx context.Context, obj runtime.Object, options
 		return nil, err
 	}
 	o.SetName(resourceName)
-	ret, err := client.Create(ctx, o, *options, append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
+
+	var ret *unstructured.Unstructured
+	if len(info.Subresource) != 0 {
+		ret, err = client.Create(ctx, o, *options, append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
+	} else {
+		ret, err = client.Create(ctx, o, *options)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -633,4 +657,40 @@ func (f *FleetClientSet) Create(ctx context.Context, obj runtime.Object, options
 	}
 	setNameAndResourceVersion(accessor, clusterName)
 	return retObj, nil
+}
+
+func (f *FleetClientSet) Delete(ctx context.Context, name string, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, false, fmt.Errorf("no request info found from ctx")
+	}
+
+	resourceName, clusterName := ParseNameFromResourceName(name, false)
+	info.Name = resourceName
+	if options.Preconditions != nil && options.Preconditions.ResourceVersion != nil {
+		options.Preconditions.ResourceVersion = pointer.String(newMultiClusterResourceVersionFromString(*options.Preconditions.ResourceVersion).get(clusterName))
+	}
+
+	body, err := encodeMetav1OptionsIntoJsonBytes(options, "DeleteOptions")
+	if err != nil {
+		return nil, false, err
+	}
+
+	client, err := f.restClientFor(clusterName)
+	if err != nil {
+		return nil, false, err
+	}
+	result := client.Delete().
+		AbsPath(constructURLPath(&url.URL{}, info)).
+		SetHeader("Content-Type", runtime.ContentTypeJSON).
+		Body(body).
+		Do(ctx)
+	if err = result.Error(); err != nil {
+		return nil, false, err
+	}
+	obj, err := result.Get()
+	if err != nil {
+		return nil, false, err
+	}
+	return obj, true, nil
 }
