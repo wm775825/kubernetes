@@ -51,6 +51,8 @@ func NewREST(optsGetter generic.RESTOptionsGetter) (*REST, *StatusREST, error) {
 		ResetFieldsStrategy: ingress.Strategy,
 
 		TableConvertor: printerstorage.TableConvertor{TableGenerator: printers.NewTableGenerator().With(printersinternal.AddHandlers)},
+
+		FleetDecorator: fleetDecorator,
 	}
 	options := &generic.StoreOptions{RESTOptions: optsGetter}
 	if err := store.CompleteWithOptions(options); err != nil {
@@ -69,6 +71,49 @@ var _ rest.ShortNamesProvider = &REST{}
 // ShortNames implements the ShortNamesProvider interface. Returns a list of short names for a resource.
 func (r *REST) ShortNames() []string {
 	return []string{"ing"}
+}
+
+func fleetDecorator(obj runtime.Object) {
+	switch obj.(type) {
+	case *networking.Ingress:
+		ing := obj.(*networking.Ingress)
+		setClusterNameSuffix(ing)
+	case *networking.IngressList:
+		items := obj.(*networking.IngressList).Items
+		for i := range items {
+			setClusterNameSuffix(&items[i])
+		}
+	default:
+	}
+}
+
+func setClusterNameSuffix(ing *networking.Ingress) {
+	if ing == nil || ing.Name == "" {
+		return
+	}
+
+	_, clusterName := genericregistry.ParseNameFromResourceName(ing.Name, false)
+	if clusterName == genericregistry.KarmadaCluster {
+		return
+	}
+
+	rules := ing.Spec.Rules
+	for i := range rules {
+		rule := &rules[i]
+		if rule.HTTP == nil {
+			continue
+		}
+		paths := rule.HTTP.Paths
+		for j := range paths {
+			path := &paths[j]
+			if svc := path.Backend.Service; svc != nil {
+				svc.Name += ".clusterspace." + clusterName
+			}
+			if resource := path.Backend.Resource; resource != nil {
+				resource.Name += ".clusterspace." + clusterName
+			}
+		}
+	}
 }
 
 // StatusREST implements the REST endpoint for changing the status of an ingress
