@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -24,10 +25,10 @@ const (
 	ClusterSpaceSeparator = "clusterspace"
 )
 
-func ParseNameFromResourceName(name string, isNotCompatibleAPI bool) (resourceName string, clusterName string) {
+func ParseNameFromResourceName(name string, defaultEmpty bool) (resourceName string, clusterName string) {
 	parts := strings.Split(name, ".")
 	if len(parts) < 3 || parts[len(parts)-2] != ClusterSpaceSeparator {
-		if isNotCompatibleAPI {
+		if defaultEmpty {
 			return name, ""
 		} else {
 			return name, KarmadaCluster
@@ -220,4 +221,21 @@ func (w *watchMux) Stop() {
 	default:
 		close(w.done)
 	}
+}
+
+func setNameAndResourceVersion(accessor metav1.Object, clusterName string) {
+	setName(accessor, clusterName)
+	setResourceVersion(accessor, clusterName)
+}
+
+func setName(accessor metav1.Object, clusterName string) {
+	if clusterName != KarmadaCluster {
+		accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
+	}
+}
+
+func setResourceVersion(accessor metav1.Object, clusterName string) {
+	mrv := newMultiClusterResourceVersionWithCapacity(1)
+	mrv.set(clusterName, accessor.GetResourceVersion())
+	accessor.SetResourceVersion(mrv.String())
 }

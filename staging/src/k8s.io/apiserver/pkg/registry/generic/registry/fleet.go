@@ -5,11 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	goerrors "errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -59,50 +62,22 @@ func (f *FleetClientSet) Get(ctx context.Context, name string, options *metav1.G
 		return nil, fmt.Errorf("no request info found from ctx")
 	}
 
-	resourceName, clusterName := ParseNameFromResourceName(info.Name, info.Clusterspace != request.ClusterspaceNone)
-	info.Name = resourceName
-	if info.Clusterspace != "" && clusterName != "" && info.Clusterspace != clusterName {
-		return nil, fmt.Errorf("inconsistent cluster name parsed from path and resource name")
-	}
-	if clusterName == "" {
-		clusterName = info.Clusterspace
-	}
-
-	location, transport, err := f.location(clusterName)
-	if err != nil {
-		return nil, err
-	}
-	newURL := constructURLPath(location, info)
-	var rv string
+	resourceName, clusterName := ParseNameFromResourceName(info.Name, false)
 	if options != nil && len(options.ResourceVersion) != 0 {
-		rv = newMultiClusterResourceVersionFromString(options.ResourceVersion).get(clusterName)
-		if len(rv) != 0 {
-			newURL += fmt.Sprintf("?resourceVersion=%s", rv)
-		}
+		options.ResourceVersion = newMultiClusterResourceVersionFromString(options.ResourceVersion).get(clusterName)
 	}
 
-	newReq, err := http.NewRequest(http.MethodGet, newURL, nil)
+	client, err := f.resourceClientFor(clusterName, info, info.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	newReq.WithContext(ctx)
-
-	resp, err := transport.RoundTrip(newReq)
+	obj, err := client.Get(ctx, resourceName, *options, append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	b, err := io.ReadAll(resp.Body)
+	b, err := json.Marshal(obj)
 	if err != nil {
 		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		status := metav1.Status{}
-		if err = decode(f.codec, b, &status); err != nil {
-			return nil, fmt.Errorf("failed to decode status: %v", err)
-		}
-		return nil, InterpretGetError(&apierrors.StatusError{ErrStatus: status}, schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}, resourceName, "")
 	}
 	objPtr := f.NewFunc()
 	if err = decode(f.codec, b, objPtr); err != nil {
@@ -113,17 +88,10 @@ func (f *FleetClientSet) Get(ctx context.Context, name string, options *metav1.G
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata: %v", err)
 	}
-	if len(rv) != 0 {
-		if err = f.validateMinimumResourceVersion(rv, accessor.GetResourceVersion()); err != nil {
-			return nil, err
-		}
+	if err = f.validateMinimumResourceVersion(options.ResourceVersion, accessor.GetResourceVersion()); err != nil {
+		return nil, err
 	}
-	if clusterName != KarmadaCluster {
-		accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
-	}
-	mrv := newMultiClusterResourceVersionWithCapacity(1)
-	mrv.set(clusterName, accessor.GetResourceVersion())
-	accessor.SetResourceVersion(mrv.String())
+	setNameAndResourceVersion(accessor, clusterName)
 	return objPtr, nil
 }
 
@@ -137,20 +105,27 @@ func removeClusterNameInReferenceField(fs fields.Selector) (fields.Selector, str
 	requirements := fs.Requirements()
 	selectors := make([]fields.Selector, 0, len(requirements))
 	var clusterName string
+	var specified bool
 	for _, require := range requirements {
 		if referenceFieldSelectors.Has(require.Field) {
+			specified = true
 			var name string
-			require.Value, name = ParseNameFromResourceName(require.Value, false)
-			if clusterName != "" && clusterName != name {
+			require.Value, name = ParseNameFromResourceName(require.Value, true)
+			if clusterName != "" && name != "" && clusterName != name {
 				return nil, "", apierrors.NewBadRequest("specifying more than one cluster name is not allowed in field selectors")
 			}
-			clusterName = name
+			if clusterName == "" && name != "" {
+				clusterName = name
+			}
 		}
 		if require.Operator == selection.NotEquals {
 			selectors = append(selectors, fields.OneTermNotEqualSelector(require.Field, require.Value))
 		} else {
 			selectors = append(selectors, fields.OneTermEqualSelector(require.Field, require.Value))
 		}
+	}
+	if specified && clusterName == "" {
+		clusterName = KarmadaCluster
 	}
 	return fields.AndSelectors(selectors...), clusterName, nil
 }
@@ -238,9 +213,7 @@ func (f *FleetClientSet) ListPredicate(ctx context.Context, p storage.SelectionP
 			if err != nil {
 				return err
 			}
-			if clusterName != KarmadaCluster {
-				accessor.SetName(accessor.GetName() + ".clusterspace." + clusterName)
-			}
+			setName(accessor, clusterName)
 			accessor.SetResourceVersion(responseRV.String())
 
 			items = append(items, clone)
@@ -366,40 +339,37 @@ func (f *FleetClientSet) getResourceVersion(ctx context.Context, clusterName str
 }
 
 func (f *FleetClientSet) list(ctx context.Context, clusterName string, info *request.RequestInfo, opts *metav1.ListOptions) (runtime.Object, error) {
-	location, transport, err := f.location(clusterName)
+	client, err := f.resourceClientFor(clusterName, info, info.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	path := constructURLPath(location, info)
-	values, err := metav1.ParameterCodec.EncodeParameters(opts, schema.GroupVersion{})
-	if err != nil {
-		return nil, err
-	}
-	queries := values.Encode()
-	if queries != "" {
-		path += "?" + queries
-	}
-	req, err := http.NewRequest(http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.WithContext(ctx)
-	resp, err := transport.RoundTrip(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	b, err := io.ReadAll(resp.Body)
+	ret, err := client.List(ctx, *opts)
 	if err != nil {
 		return nil, err
 	}
 
-	obj := f.NewListFunc()
-	if err = decode(f.codec, b, obj); err != nil {
+	listObj := f.NewListFunc()
+	listPtr, err := meta.GetItemsPtr(listObj)
+	if err != nil {
 		return nil, err
 	}
-	return obj, nil
+	v, err := conversion.EnforcePtr(listPtr)
+	if err != nil || v.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("need ptr to slice: %v", err)
+	}
+
+	for _, item := range ret.Items {
+		b, err := json.Marshal(&item)
+		if err != nil {
+			return nil, err
+		}
+		obj := f.NewFunc()
+		if err = decode(f.codec, b, obj); err != nil {
+			return nil, err
+		}
+		v.Set(reflect.Append(v, reflect.ValueOf(obj).Elem()))
+	}
+	return listObj, nil
 }
 
 func (f *FleetClientSet) validateMinimumResourceVersion(minimumResourceVersion, actualResourceVersion string) error {
@@ -420,6 +390,18 @@ func (f *FleetClientSet) validateMinimumResourceVersion(minimumResourceVersion, 
 		return storage.NewTooLargeResourceVersionError(minimumRV, actualRV, 0)
 	}
 	return nil
+}
+
+func (f *FleetClientSet) resourceClientFor(clusterName string, info *request.RequestInfo, namespace string) (dynamic.ResourceInterface, error) {
+	client, err := f.dynamicClientFor(clusterName)
+	if err != nil {
+		return nil, err
+	}
+	resourceClient := client.Resource(schema.GroupVersionResource{Group: info.APIGroup, Version: info.APIVersion, Resource: info.Resource})
+	if namespace != "" && info.Resource != "namespaces" {
+		return resourceClient.Namespace(namespace), nil
+	}
+	return resourceClient, nil
 }
 
 func (f *FleetClientSet) dynamicClientFor(clusterName string) (*dynamic.DynamicClient, error) {
@@ -562,9 +544,7 @@ func (f *FleetClientSet) WatchPredicate(ctx context.Context, p storage.Selection
 		if err != nil {
 			return
 		}
-		if cluster != KarmadaCluster {
-			accessor.SetName(accessor.GetName() + ".clusterspace." + cluster)
-		}
+		setName(accessor, cluster)
 
 		responseRVLock.Lock()
 		defer responseRVLock.Unlock()
@@ -607,15 +587,50 @@ func (f *FleetClientSet) WatchPredicate(ctx context.Context, p storage.Selection
 }
 
 func (f *FleetClientSet) watcherFor(ctx context.Context, clusterName string, info *request.RequestInfo, opts metav1.ListOptions) (w watch.Interface, err error) {
-	client, err := f.dynamicClientFor(clusterName)
+	client, err := f.resourceClientFor(clusterName, info, info.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	resourceClient := client.Resource(schema.GroupVersionResource{Group: info.APIGroup, Version: info.APIVersion, Resource: info.Resource})
-	if info.Namespace != "" && info.Resource != "namespaces" {
-		w, err = resourceClient.Namespace(info.Namespace).Watch(ctx, opts)
-	} else {
-		w, err = resourceClient.Watch(ctx, opts)
+	return client.Watch(ctx, opts)
+}
+
+func (f *FleetClientSet) Create(ctx context.Context, obj runtime.Object, options *metav1.CreateOptions) (runtime.Object, error) {
+	o, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil, apierrors.NewInternalError(goerrors.New("failed to convert object to *unstructured.Unstructured"))
 	}
-	return
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewInternalError(goerrors.New("no request info found from ctx"))
+	}
+	ns, ok := request.NamespaceFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewInternalError(goerrors.New("failed to get namespace from context"))
+	}
+
+	resourceName, clusterName := ParseNameFromResourceName(o.GetName(), false)
+	client, err := f.resourceClientFor(clusterName, info, ns)
+	if err != nil {
+		return nil, err
+	}
+	o.SetName(resourceName)
+	ret, err := client.Create(ctx, o, *options, append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
+	if err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(ret)
+	if err != nil {
+		return nil, err
+	}
+
+	retObj := f.NewFunc()
+	if err = decode(f.codec, b, retObj); err != nil {
+		return nil, err
+	}
+	accessor, err := meta.Accessor(retObj)
+	if err != nil {
+		return nil, err
+	}
+	setNameAndResourceVersion(accessor, clusterName)
+	return retObj, nil
 }
