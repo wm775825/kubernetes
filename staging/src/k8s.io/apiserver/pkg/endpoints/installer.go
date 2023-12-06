@@ -1283,7 +1283,7 @@ func restfulCreateResource(r rest.Creater, scope handlers.RequestScope, admit ad
 
 func restfulDeleteResource(r rest.GracefulDeleter, allowsOptions bool, scope handlers.RequestScope, admit admission.Interface) restful.RouteFunction {
 	return func(req *restful.Request, res *restful.Response) {
-		handlers.DeleteResource(r, allowsOptions, &scope, admit)(res.ResponseWriter, req.Request)
+		handlers.FleetDeleteResource(r, allowsOptions, &scope, admit)(res.ResponseWriter, req.Request)
 	}
 }
 

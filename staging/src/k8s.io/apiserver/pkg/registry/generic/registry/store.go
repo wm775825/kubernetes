@@ -1068,6 +1068,10 @@ func (e *Store) updateForGracefulDeletionAndFinalizers(ctx context.Context, name
 // Delete removes the item from storage.
 // options can be mutated by rest.BeforeDelete due to a graceful deletion strategy.
 func (e *Store) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	if e.fleetClientSet != nil {
+		return e.fleetClientSet.Delete(ctx, name, options)
+	}
+
 	key, err := e.KeyFunc(ctx, name)
 	if err != nil {
 		return nil, false, err
