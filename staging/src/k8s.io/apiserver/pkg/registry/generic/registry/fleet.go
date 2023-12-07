@@ -28,15 +28,18 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/warning"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/rest"
+	restclient "k8s.io/client-go/rest"
 	transport2 "k8s.io/client-go/transport"
+	"k8s.io/klog/v2"
 	"k8s.io/metrics/pkg/apis/metrics"
 	"k8s.io/utils/pointer"
 )
@@ -46,7 +49,7 @@ type FleetClientSet struct {
 	clustersLister func() ([]*clusterv1alpha1.Cluster, error)
 	secretGetter   func(string, string) (*corev1.Secret, error)
 
-	LoopbackConfig   *rest.Config
+	LoopbackConfig   *restclient.Config
 	karmadaLocation  *url.URL
 	karmadaTransport http.RoundTripper
 
@@ -435,7 +438,7 @@ func (f *FleetClientSet) location(clusterName string) (*url.URL, http.RoundTripp
 }
 
 // restClientFor return rest client in the dynamicClient
-func (f *FleetClientSet) restClientFor(clusterName string) (*rest.RESTClient, error) {
+func (f *FleetClientSet) restClientFor(clusterName string) (*restclient.RESTClient, error) {
 	config, err := f.restConfigFor(clusterName)
 	if err != nil {
 		return nil, err
@@ -443,10 +446,10 @@ func (f *FleetClientSet) restClientFor(clusterName string) (*rest.RESTClient, er
 	config = dynamic.ConfigFor(config)
 	config.GroupVersion = &schema.GroupVersion{}
 	config.APIPath = "/"
-	return rest.RESTClientFor(config)
+	return restclient.RESTClientFor(config)
 }
 
-func (f *FleetClientSet) restConfigFor(clusterName string) (*rest.Config, error) {
+func (f *FleetClientSet) restConfigFor(clusterName string) (*restclient.Config, error) {
 	if clusterName == KarmadaCluster {
 		return f.LoopbackConfig, nil
 	}
@@ -499,7 +502,7 @@ func (f *FleetClientSet) restConfigFor(clusterName string) (*rest.Config, error)
 		trans.ProxyConnectHeader = ParseProxyHeaders(cluster.Spec.ProxyHeader)
 	}
 
-	return &rest.Config{
+	return &restclient.Config{
 		BearerToken: string(token),
 		Host:        apiEndpoint,
 		Transport:   trans,
@@ -693,4 +696,103 @@ func (f *FleetClientSet) Delete(ctx context.Context, name string, options *metav
 		return nil, false, err
 	}
 	return obj, true, nil
+}
+
+func (f *FleetClientSet) Update(ctx context.Context, objInfo rest.UpdatedObjectInfo, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, false, fmt.Errorf("no request info found from ctx")
+	}
+
+	resourceName, clusterName := ParseNameFromResourceName(info.Name, false)
+
+	client, err := f.resourceClientFor(clusterName, info, info.Namespace)
+	if err != nil {
+		return nil, false, err
+	}
+
+	req, ok := request.RequestFrom(ctx)
+	if !ok {
+		return nil, false, fmt.Errorf("no http request found from ctx")
+	}
+
+	var ret *unstructured.Unstructured
+	switch req.Method {
+	case http.MethodPut:
+		newObj, err := objInfo.UpdatedObject(ctx, nil)
+		if err != nil {
+			klog.Errorf("failed to get new object with objInfo.UpdatedObject: %v", err)
+			return nil, false, err
+		}
+
+		obj, ok := newObj.(*unstructured.Unstructured)
+		if !ok {
+			return nil, false, apierrors.NewInternalError(goerrors.New("failed to convert object to *unstructured.Unstructured"))
+		}
+
+		obj.SetName(resourceName)
+		obj.SetResourceVersion(newMultiClusterResourceVersionFromString(obj.GetResourceVersion()).get(clusterName))
+
+		if len(info.Subresource) != 0 {
+			ret, err = client.Update(ctx, obj, *options, append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
+		} else {
+			ret, err = client.Update(ctx, obj, *options)
+		}
+		if err != nil {
+			klog.Errorf("update err: %v", err)
+			return nil, false, err
+		}
+	case http.MethodPatch:
+		newObj, err := objInfo.UpdatedObject(ctx, nil)
+		if err != nil {
+			klog.Errorf("failed to get new object with objInfo.UpdatedObject: %v", err)
+			return nil, false, err
+		}
+		patchObj := newObj.(rest.PatchObject)
+
+		pt := req.Header.Get("Content-Type")
+		if len(info.Subresource) != 0 {
+			ret, err = client.Patch(ctx, resourceName, types.PatchType(pt), patchObj.GetPatched(), *createToPatchOptions(options), append([]string{info.Subresource}, info.PartsAfterSubresource...)...)
+		} else {
+			ret, err = client.Patch(ctx, resourceName, types.PatchType(pt), patchObj.GetPatched(), *createToPatchOptions(options))
+		}
+		if err != nil {
+			klog.Errorf("failed to update: %v", err)
+			return nil, false, err
+		}
+	default:
+		klog.Errorf("operation %s not support now", req.Method)
+		return nil, false, fmt.Errorf("operation %s not support now", req.Method)
+	}
+
+	b, err := json.Marshal(ret)
+	if err != nil {
+		klog.Errorf("failed to marshal: %v", err)
+		return nil, false, err
+	}
+
+	objPtr := f.NewFunc()
+	if err = decode(f.codec, b, objPtr); err != nil {
+		klog.Errorf("failed to decode object: %v", err)
+		return nil, false, err
+	}
+	accessor, err := meta.Accessor(objPtr)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get metadata: %v", err)
+	}
+	setNameAndResourceVersion(accessor, clusterName)
+	return objPtr, false, nil
+}
+
+func createToPatchOptions(uo *metav1.UpdateOptions) *metav1.PatchOptions {
+	if uo == nil {
+		return nil
+	}
+	po := &metav1.PatchOptions{
+		DryRun:          uo.DryRun,
+		FieldManager:    uo.FieldManager,
+		FieldValidation: uo.FieldValidation,
+	}
+	po.TypeMeta.SetGroupVersionKind(metav1.SchemeGroupVersion.WithKind("PatchOptions"))
+	return po
 }

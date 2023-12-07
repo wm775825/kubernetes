@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/validation/path"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/admission"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
@@ -215,6 +216,10 @@ func (i *defaultUpdatedObjectInfo) UpdatedObject(ctx context.Context, oldObj run
 		newObj = newObj.DeepCopyObject()
 	}
 
+	if oldObj == nil {
+		return newObj, nil
+	}
+
 	// Allow any configured transformers to update the new object
 	for _, transformer := range i.transformers {
 		newObj, err = transformer(ctx, newObj, oldObj)
@@ -224,6 +229,43 @@ func (i *defaultUpdatedObjectInfo) UpdatedObject(ctx context.Context, oldObj run
 	}
 
 	return newObj, nil
+}
+
+type PatchObject struct {
+	patchByte []byte
+}
+
+func NewPatchObject(patch []byte) runtime.Object {
+	return PatchObject{patchByte: patch}
+}
+
+func (PatchObject) GetObjectKind() schema.ObjectKind { return schema.EmptyObjectKind }
+func (o PatchObject) DeepCopyObject() runtime.Object {
+	return o
+}
+func (o PatchObject) GetPatched() []byte {
+	return o.patchByte
+}
+
+// defaultPatchedObjectInfo implements UpdatedObjectInfo
+type defaultPatchedObjectInfo struct {
+	obj runtime.Object
+}
+
+// DefaultPatchedObjectInfo returns an UpdatedObjectInfo impl based on the specified object.
+func DefaultPatchedObjectInfo(obj runtime.Object, transformers ...TransformFunc) UpdatedObjectInfo {
+	return &defaultPatchedObjectInfo{obj: obj}
+}
+
+// Preconditions satisfies the UpdatedObjectInfo interface.
+func (i *defaultPatchedObjectInfo) Preconditions() *metav1.Preconditions {
+	return &metav1.Preconditions{}
+}
+
+// UpdatedObject satisfies the UpdatedObjectInfo interface.
+// It returns a copy of the held obj, passed through any configured transformers.
+func (i *defaultPatchedObjectInfo) UpdatedObject(ctx context.Context, _ runtime.Object) (runtime.Object, error) {
+	return i.obj.DeepCopyObject(), nil
 }
 
 // wrappedUpdatedObjectInfo allows wrapping an existing objInfo and
@@ -254,6 +296,10 @@ func (i *wrappedUpdatedObjectInfo) UpdatedObject(ctx context.Context, oldObj run
 	newObj, err := i.objInfo.UpdatedObject(ctx, oldObj)
 	if err != nil {
 		return newObj, err
+	}
+
+	if oldObj == nil {
+		return newObj, nil
 	}
 
 	// Allow any configured transformers to update the new object or error

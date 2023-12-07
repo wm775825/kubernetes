@@ -553,6 +553,10 @@ func (e *Store) deleteWithoutFinalizers(ctx context.Context, name, key string, o
 // or an error. If the registry allows create-on-update, the create flow will be executed.
 // A bool is returned along with the object and any errors, to indicate object creation.
 func (e *Store) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	if e.fleetClientSet != nil {
+		return e.fleetClientSet.Update(ctx, objInfo, options)
+	}
+
 	key, err := e.KeyFunc(ctx, name)
 	if err != nil {
 		return nil, false, err
