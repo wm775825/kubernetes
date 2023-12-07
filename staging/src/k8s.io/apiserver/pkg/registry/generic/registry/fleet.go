@@ -378,6 +378,13 @@ func (f *FleetClientSet) list(ctx context.Context, clusterName string, info *req
 		}
 		v.Set(reflect.Append(v, reflect.ValueOf(obj).Elem()))
 	}
+
+	accessor, err := meta.ListAccessor(listObj)
+	if err != nil {
+		return nil, err
+	}
+	accessor.SetResourceVersion(ret.GetResourceVersion())
+	accessor.SetContinue(ret.GetContinue())
 	return listObj, nil
 }
 
