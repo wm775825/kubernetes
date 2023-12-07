@@ -18,6 +18,7 @@ package rest
 
 import (
 	policyapiv1 "k8s.io/api/policy/v1"
+	policyapiv1beta1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
@@ -40,6 +41,12 @@ func (p RESTStorageProvider) NewRESTStorage(apiResourceConfigSource serverstorag
 		apiGroupInfo.VersionedResourcesStorageMap[policyapiv1.SchemeGroupVersion.Version] = storageMap
 	}
 
+	if storageMap, err := p.v1beta1Storage(apiResourceConfigSource, restOptionsGetter); err != nil {
+		return genericapiserver.APIGroupInfo{}, err
+	} else if len(storageMap) > 0 {
+		apiGroupInfo.VersionedResourcesStorageMap[policyapiv1beta1.SchemeGroupVersion.Version] = storageMap
+	}
+
 	return apiGroupInfo, nil
 }
 
@@ -47,6 +54,21 @@ func (p RESTStorageProvider) v1Storage(apiResourceConfigSource serverstorage.API
 	storage := map[string]rest.Storage{}
 
 	if resource := "poddisruptionbudgets"; apiResourceConfigSource.ResourceEnabled(policyapiv1.SchemeGroupVersion.WithResource(resource)) {
+		poddisruptionbudgetStorage, poddisruptionbudgetStatusStorage, err := poddisruptionbudgetstore.NewREST(restOptionsGetter)
+		if err != nil {
+			return storage, err
+		}
+		storage[resource] = poddisruptionbudgetStorage
+		storage[resource+"/status"] = poddisruptionbudgetStatusStorage
+	}
+
+	return storage, nil
+}
+
+func (p RESTStorageProvider) v1beta1Storage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (map[string]rest.Storage, error) {
+	storage := map[string]rest.Storage{}
+
+	if resource := "poddisruptionbudgets"; apiResourceConfigSource.ResourceEnabled(policyapiv1beta1.SchemeGroupVersion.WithResource(resource)) {
 		poddisruptionbudgetStorage, poddisruptionbudgetStatusStorage, err := poddisruptionbudgetstore.NewREST(restOptionsGetter)
 		if err != nil {
 			return storage, err
