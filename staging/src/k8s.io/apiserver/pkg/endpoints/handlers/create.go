@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metainternalversionscheme "k8s.io/apimachinery/pkg/apis/meta/internalversion/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -49,6 +50,143 @@ import (
 )
 
 var namespaceGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
+
+func fleetCreateHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Interface, includeName bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		ctx := req.Context()
+		namespace, name, err := scope.Namer.Name(req)
+		if err != nil {
+			if includeName {
+				// name was required, return
+				scope.err(err, w, req)
+				return
+			}
+
+			// otherwise attempt to look up the namespace
+			namespace, err = scope.Namer.Namespace(req)
+			if err != nil {
+				scope.err(err, w, req)
+				return
+			}
+		}
+
+		// enforce a timeout of at most requestTimeoutUpperBound (34s) or less if the user-provided
+		// timeout inside the parent context is lower than requestTimeoutUpperBound.
+		ctx, cancel := context.WithTimeout(ctx, requestTimeoutUpperBound)
+		defer cancel()
+		outputMediaType, _, err := negotiation.NegotiateOutputMediaType(req, scope.Serializer, scope)
+		if err != nil {
+			scope.err(err, w, req)
+			return
+		}
+
+		gv := scope.Kind.GroupVersion()
+		s, err := negotiation.NegotiateInputSerializer(req, false, scope.Serializer)
+		if err != nil {
+			scope.err(err, w, req)
+			return
+		}
+
+		body, err := limitedReadBodyWithRecordMetric(ctx, req, scope.MaxRequestBodyBytes, scope.Resource.GroupResource().String(), requestmetrics.Create)
+		if err != nil {
+			scope.err(err, w, req)
+			return
+		}
+
+		options := &metav1.CreateOptions{}
+		values := req.URL.Query()
+		if err := metainternalversionscheme.ParameterCodec.DecodeParameters(values, scope.MetaGroupVersion, options); err != nil {
+			err = errors.NewBadRequest(err.Error())
+			scope.err(err, w, req)
+			return
+		}
+		if errs := validation.ValidateCreateOptions(options); len(errs) > 0 {
+			err := errors.NewInvalid(schema.GroupKind{Group: metav1.GroupName, Kind: "CreateOptions"}, "", errs)
+			scope.err(err, w, req)
+			return
+		}
+		options.TypeMeta.SetGroupVersionKind(metav1.SchemeGroupVersion.WithKind("CreateOptions"))
+
+		defaultGVK := scope.Kind
+		original := r.New()
+
+		validationDirective := fieldValidation(options.FieldValidation)
+		decodeSerializer := s.Serializer
+		if validationDirective == metav1.FieldValidationWarn || validationDirective == metav1.FieldValidationStrict {
+			decodeSerializer = s.StrictSerializer
+		}
+
+		decoder := scope.Serializer.DecoderToVersion(decodeSerializer, scope.HubGroupVersion)
+		obj, gvk, err := decoder.Decode(body, &defaultGVK, original)
+		if err != nil {
+			strictError, isStrictError := runtime.AsStrictDecodingError(err)
+			switch {
+			case isStrictError && obj != nil && validationDirective == metav1.FieldValidationWarn:
+				addStrictDecodingWarnings(req.Context(), strictError.Errors())
+			case isStrictError && validationDirective == metav1.FieldValidationIgnore:
+				klog.Warningf("unexpected strict error when field validation is set to ignore")
+				fallthrough
+			default:
+				err = transformDecodeError(scope.Typer, err, original, gvk, body)
+				scope.err(err, w, req)
+				return
+			}
+		}
+
+		objGV := gvk.GroupVersion()
+		if !scope.AcceptsGroupVersion(objGV) {
+			err = errors.NewBadRequest(fmt.Sprintf("the API version in the data (%s) does not match the expected API version (%v)", objGV.String(), gv.String()))
+			scope.err(err, w, req)
+			return
+		}
+
+		// On create, get name from new object if unset
+		if len(name) == 0 {
+			_, name, _ = scope.Namer.ObjectName(obj)
+		}
+		if len(namespace) == 0 && scope.Resource == namespaceGVR {
+			namespace = name
+		}
+		ctx = request.WithNamespace(ctx, namespace)
+
+		if objectMeta, err := meta.Accessor(obj); err == nil {
+			preserveObjectMetaSystemFields := false
+			if c, ok := r.(rest.SubresourceObjectMetaPreserver); ok && len(scope.Subresource) > 0 {
+				preserveObjectMetaSystemFields = c.PreserveRequestObjectMetaSystemFieldsOnSubresourceCreate()
+			}
+			if !preserveObjectMetaSystemFields {
+				rest.WipeObjectMetaSystemFields(objectMeta)
+			}
+
+			// ensure namespace on the object is correct, or error if a conflicting namespace was set in the object
+			if err := rest.EnsureObjectNamespaceMatchesRequestNamespace(rest.ExpectedNamespaceForResource(namespace, scope.Resource), objectMeta); err != nil {
+				scope.err(err, w, req)
+				return
+			}
+		}
+
+		obj = &unstructured.Unstructured{}
+		_, _, err = unstructured.UnstructuredJSONScheme.Decode(body, nil, obj)
+		if err != nil {
+			err = errors.NewInternalError(fmt.Errorf("failed to decode body into *unstructured.unstructured: %v", err))
+			scope.err(err, w, req)
+			return
+		}
+
+		result, err := r.Create(ctx, name, obj, nil, options)
+		if err != nil {
+			scope.err(err, w, req)
+			return
+		}
+
+		code := http.StatusCreated
+		status, ok := result.(*metav1.Status)
+		if ok && status.Code == 0 {
+			status.Code = int32(code)
+		}
+		transformResponseObject(ctx, scope, req, w, code, outputMediaType, result)
+	}
+}
 
 func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Interface, includeName bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -237,12 +375,12 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 
 // CreateNamedResource returns a function that will handle a resource creation with name.
 func CreateNamedResource(r rest.NamedCreater, scope *RequestScope, admission admission.Interface) http.HandlerFunc {
-	return createHandler(r, scope, admission, true)
+	return fleetCreateHandler(r, scope, admission, true)
 }
 
 // CreateResource returns a function that will handle a resource creation.
 func CreateResource(r rest.Creater, scope *RequestScope, admission admission.Interface) http.HandlerFunc {
-	return createHandler(&namedCreaterAdapter{r}, scope, admission, false)
+	return fleetCreateHandler(&namedCreaterAdapter{r}, scope, admission, false)
 }
 
 type namedCreaterAdapter struct {

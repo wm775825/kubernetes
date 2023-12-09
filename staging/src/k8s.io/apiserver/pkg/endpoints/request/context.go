@@ -18,6 +18,7 @@ package request
 
 import (
 	"context"
+	"net/http"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -32,6 +33,9 @@ const (
 
 	// userKey is the context key for the request user.
 	userKey
+
+	// userKey is the context key for the http request.
+	requestKey
 )
 
 // NewContext instantiates a base context object for request flows.
@@ -75,4 +79,15 @@ func WithUser(parent context.Context, user user.Info) context.Context {
 func UserFrom(ctx context.Context) (user.Info, bool) {
 	user, ok := ctx.Value(userKey).(user.Info)
 	return user, ok
+}
+
+// WithRequest returns a copy of parent in which the request value is set
+func WithRequest(parent context.Context, req *http.Request) context.Context {
+	return WithValue(parent, requestKey, req.Clone(req.Context()))
+}
+
+// RequestFrom returns the value of the request key on the ctx
+func RequestFrom(ctx context.Context) (*http.Request, bool) {
+	request, ok := ctx.Value(requestKey).(*http.Request)
+	return request, ok
 }

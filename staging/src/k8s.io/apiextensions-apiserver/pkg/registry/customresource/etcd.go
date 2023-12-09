@@ -310,6 +310,10 @@ func (i *scaleUpdatedObjectInfo) Preconditions() *metav1.Preconditions {
 }
 
 func (i *scaleUpdatedObjectInfo) UpdatedObject(ctx context.Context, oldObj runtime.Object) (runtime.Object, error) {
+	if oldObj == nil {
+		return i.reqObjInfo.UpdatedObject(ctx, oldObj)
+	}
+
 	cr := oldObj.DeepCopyObject().(*unstructured.Unstructured)
 	const invalidSpecReplicas = -2147483648 // smallest int32
 

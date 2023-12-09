@@ -19,10 +19,16 @@ package registry
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
+
+	"k8s.io/klog/v2"
+
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/validation"
@@ -47,10 +53,9 @@ import (
 	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
 	"k8s.io/apiserver/pkg/util/dryrun"
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
+	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/structured-merge-diff/v4/fieldpath"
-
-	"k8s.io/klog/v2"
 )
 
 // FinishFunc is a function returned by Begin hooks to complete an operation.
@@ -227,6 +232,10 @@ type Store struct {
 	// If set, DestroyFunc has to be implemented in thread-safe way and
 	// be prepared for being called more than once.
 	DestroyFunc func()
+
+	fleetClientSet *FleetClientSet
+
+	FleetDecorator func(runtime.Object)
 }
 
 // Note: the rest.StandardStorage interface aggregates the common REST verbs
@@ -356,6 +365,18 @@ func (e *Store) ListPredicate(ctx context.Context, p storage.SelectionPredicate,
 		// By default we should serve the request from etcd.
 		options = &metainternalversion.ListOptions{ResourceVersion: ""}
 	}
+
+	if e.fleetClientSet != nil {
+		obj, err := e.fleetClientSet.ListPredicate(ctx, p, options)
+		if err != nil {
+			return nil, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(obj)
+		}
+		return obj, nil
+	}
+
 	p.Limit = options.Limit
 	p.Continue = options.Continue
 	list := e.NewListFunc()
@@ -397,6 +418,17 @@ func finishNothing(context.Context, bool) {}
 // hooks).  Tests which call this might want to call DeepCopy if they expect to
 // be able to examine the input and output objects for differences.
 func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
+	if e.fleetClientSet != nil {
+		ret, err := e.fleetClientSet.Create(ctx, obj, options)
+		if err != nil {
+			return nil, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(ret)
+		}
+		return ret, nil
+	}
+
 	var finishCreate FinishFunc = finishNothing
 
 	// Init metadata as early as possible.
@@ -537,6 +569,17 @@ func (e *Store) deleteWithoutFinalizers(ctx context.Context, name, key string, o
 // or an error. If the registry allows create-on-update, the create flow will be executed.
 // A bool is returned along with the object and any errors, to indicate object creation.
 func (e *Store) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	if e.fleetClientSet != nil {
+		obj, b, err := e.fleetClientSet.Update(ctx, objInfo, options)
+		if err != nil {
+			return nil, false, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(obj)
+		}
+		return obj, b, nil
+	}
+
 	key, err := e.KeyFunc(ctx, name)
 	if err != nil {
 		return nil, false, err
@@ -764,6 +807,17 @@ func newDeleteOptionsFromUpdateOptions(in *metav1.UpdateOptions) *metav1.DeleteO
 
 // Get retrieves the item from storage.
 func (e *Store) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	if e.fleetClientSet != nil {
+		obj, err := e.fleetClientSet.Get(ctx, name, options)
+		if err != nil {
+			return nil, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(obj)
+		}
+		return obj, nil
+	}
+
 	obj := e.NewFunc()
 	key, err := e.KeyFunc(ctx, name)
 	if err != nil {
@@ -1048,6 +1102,17 @@ func (e *Store) updateForGracefulDeletionAndFinalizers(ctx context.Context, name
 // Delete removes the item from storage.
 // options can be mutated by rest.BeforeDelete due to a graceful deletion strategy.
 func (e *Store) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	if e.fleetClientSet != nil {
+		obj, b, err := e.fleetClientSet.Delete(ctx, name, options)
+		if err != nil {
+			return nil, false, err
+		}
+		if e.FleetDecorator != nil {
+			e.FleetDecorator(obj)
+		}
+		return obj, b, nil
+	}
+
 	key, err := e.KeyFunc(ctx, name)
 	if err != nil {
 		return nil, false, err
@@ -1355,6 +1420,17 @@ func (e *Store) Watch(ctx context.Context, options *metainternalversion.ListOpti
 
 // WatchPredicate starts a watch for the items that matches.
 func (e *Store) WatchPredicate(ctx context.Context, p storage.SelectionPredicate, resourceVersion string, sendInitialEvents *bool) (watch.Interface, error) {
+	if e.fleetClientSet != nil {
+		w, err := e.fleetClientSet.WatchPredicate(ctx, p, resourceVersion, sendInitialEvents)
+		if err != nil {
+			return nil, err
+		}
+		if e.FleetDecorator != nil {
+			return newDecoratedWatcher(ctx, w, e.FleetDecorator), nil
+		}
+		return w, nil
+	}
+
 	storageOpts := storage.ListOptions{ResourceVersion: resourceVersion, Predicate: p, Recursive: true, SendInitialEvents: sendInitialEvents}
 
 	// if we're not already namespace-scoped, see if the field selector narrows the scope of the watch
@@ -1566,6 +1642,36 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 					}
 				})
 			}
+		}
+	}
+
+	if opts.KubeInformers != nil && opts.KarmadaInformers != nil && opts.LoopbackConfig != nil {
+		karmadaLocation, err := url.Parse(opts.LoopbackConfig.Host)
+		if err != nil {
+			return fmt.Errorf("failed to init karmada location: %v", err)
+		}
+		karmadaTransport, err := restclient.TransportFor(opts.LoopbackConfig)
+		if err != nil {
+			return fmt.Errorf("failed to init karmada transport: %v", err)
+		}
+
+		e.fleetClientSet = &FleetClientSet{
+			clustersLister: func() ([]*clusterv1alpha1.Cluster, error) {
+				return opts.KarmadaInformers.Cluster().V1alpha1().Clusters().Lister().List(labels.Everything())
+			},
+			clusterGetter: func(name string) (*clusterv1alpha1.Cluster, error) {
+				return opts.KarmadaInformers.Cluster().V1alpha1().Clusters().Lister().Get(name)
+			},
+			secretGetter: func(namespace string, name string) (*corev1.Secret, error) {
+				return opts.KubeInformers.Core().V1().Secrets().Lister().Secrets(namespace).Get(name)
+			},
+			LoopbackConfig:   restclient.CopyConfig(opts.LoopbackConfig),
+			karmadaLocation:  karmadaLocation,
+			karmadaTransport: karmadaTransport,
+			codec:            opts.StorageConfig.Codec,
+			NewFunc:          e.NewFunc,
+			NewListFunc:      e.NewListFunc,
+			Versioner:        storage.APIObjectVersioner{},
 		}
 	}
 

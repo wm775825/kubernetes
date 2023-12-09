@@ -129,6 +129,11 @@ func (p *Preconditions) Check(key string, obj runtime.Object) error {
 	if p == nil {
 		return nil
 	}
+
+	if obj == nil {
+		return nil
+	}
+
 	objMeta, err := meta.Accessor(obj)
 	if err != nil {
 		return NewInternalErrorf(

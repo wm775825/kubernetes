@@ -48,10 +48,11 @@ type RequestInfo struct {
 	// for non-resource requests, this is the lowercase http verb
 	Verb string
 
-	APIPrefix  string
-	APIGroup   string
-	APIVersion string
-	Namespace  string
+	APIPrefix    string
+	APIGroup     string
+	APIVersion   string
+	Namespace    string
+	Clusterspace string
 	// Resource is the name of the resource being requested.  This is not the kind.  For example: pods
 	Resource string
 	// Subresource is the name of the subresource being requested.  This is a different resource, scoped to the parent resource, but it may have a different kind.
@@ -62,7 +63,16 @@ type RequestInfo struct {
 	Name string
 	// Parts are the path parts for the request, always starting with /{resource}/{name}
 	Parts []string
+	// PartsAfterSubresource are the path parts after subresource
+	PartsAfterSubresource []string
 }
+
+const (
+	// ClusterspaceNone means fetch cluster name from resource name or ClusterspaceAll dependent on request method
+	ClusterspaceNone    = ""
+	ClusterspaceAll     = "all"
+	ClusterspaceKarmada = "karmada"
+)
 
 // specialVerbs contains just strings which are used in REST paths for special actions that don't fall under the normal
 // CRUDdy GET/POST/PUT/DELETE actions on REST objects.
@@ -85,7 +95,7 @@ type RequestInfoFactory struct {
 	GrouplessAPIPrefixes sets.String // without leading and trailing slashes
 }
 
-// TODO write an integration test against the swagger doc to test the RequestInfo and match up behavior to responses
+// NewRequestInfo TODO write an integration test against the swagger doc to test the RequestInfo and match up behavior to responses
 // NewRequestInfo returns the information from the http request.  If error is not nil, RequestInfo holds the information as best it is known before the failure
 // It handles both resource and non-resource requests and fills in all the pertinent information for each.
 // Valid Inputs:
@@ -197,6 +207,7 @@ func (r *RequestInfoFactory) NewRequestInfo(req *http.Request) (*RequestInfo, er
 	// parts look like: resource/resourceName/subresource/other/stuff/we/don't/interpret
 	switch {
 	case len(requestInfo.Parts) >= 3 && !specialVerbsNoSubresources.Has(requestInfo.Verb):
+		requestInfo.PartsAfterSubresource = requestInfo.Parts[3:]
 		requestInfo.Subresource = requestInfo.Parts[2]
 		fallthrough
 	case len(requestInfo.Parts) >= 2:

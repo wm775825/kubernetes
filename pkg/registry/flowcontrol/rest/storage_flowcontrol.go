@@ -119,15 +119,7 @@ func (p RESTStorageProvider) GroupName() string {
 
 // PostStartHook returns the hook func that launches the config provider
 func (p RESTStorageProvider) PostStartHook() (string, genericapiserver.PostStartHookFunc, error) {
-	bce := &bootstrapConfigurationEnsurer{
-		informersSynced: []cache.InformerSynced{
-			p.InformerFactory.Flowcontrol().V1beta3().PriorityLevelConfigurations().Informer().HasSynced,
-			p.InformerFactory.Flowcontrol().V1beta3().FlowSchemas().Informer().HasSynced,
-		},
-		fsLister:  p.InformerFactory.Flowcontrol().V1beta3().FlowSchemas().Lister(),
-		plcLister: p.InformerFactory.Flowcontrol().V1beta3().PriorityLevelConfigurations().Lister(),
-	}
-	return PostStartHookName, bce.ensureAPFBootstrapConfiguration, nil
+	return PostStartHookName, func(context genericapiserver.PostStartHookContext) error { return nil }, nil
 }
 
 type bootstrapConfigurationEnsurer struct {

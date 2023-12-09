@@ -134,8 +134,13 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	return r.store.Watch(ctx, options)
 }
 
-// Delete enforces life-cycle rules for namespace termination
+// Delete forwards the DELETE request to store
 func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	return r.store.Delete(ctx, name, deleteValidation, options)
+}
+
+// delete enforces life-cycle rules for namespace termination
+func (r *REST) delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
 	nsObj, err := r.Get(ctx, name, &metav1.GetOptions{})
 	if err != nil {
 		return nil, false, err

@@ -407,6 +407,11 @@ func (i *scaleUpdatedObjectInfo) UpdatedObject(ctx context.Context, oldObj runti
 	if !ok {
 		return nil, errors.NewBadRequest(fmt.Sprintf("expected existing object type to be Deployment, got %T", deployment))
 	}
+
+	if oldObj == nil {
+		return deployment, nil
+	}
+
 	// if zero-value, the existing object does not exist
 	if len(deployment.ResourceVersion) == 0 {
 		return nil, errors.NewNotFound(apps.Resource("deployments/scale"), i.name)

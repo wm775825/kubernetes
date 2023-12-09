@@ -653,10 +653,13 @@ func (p *patcher) patchResource(ctx context.Context, scope *RequestScope) (runti
 		return obj, nil
 	}
 
-	transformers := []rest.TransformFunc{p.applyPatch, p.applyAdmission, dedupOwnerReferencesTransformer}
+	//transformers := []rest.TransformFunc{p.applyPatch, p.applyAdmission, dedupOwnerReferencesTransformer}
+
+	patchObj := rest.NewPatchObject(p.patchBytes)
 
 	wasCreated := false
-	p.updatedObjectInfo = rest.DefaultUpdatedObjectInfo(nil, transformers...)
+	//p.updatedObjectInfo = rest.DefaultUpdatedObjectInfo(nil, transformers...)
+	p.updatedObjectInfo = rest.DefaultPatchedObjectInfo(patchObj)
 	requestFunc := func() (runtime.Object, error) {
 		// Pass in UpdateOptions to override UpdateStrategy.AllowUpdateOnCreate
 		options := patchToUpdateOptions(p.options)

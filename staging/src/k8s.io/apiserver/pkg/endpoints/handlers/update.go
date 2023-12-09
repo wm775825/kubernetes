@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metainternalversionscheme "k8s.io/apimachinery/pkg/apis/meta/internalversion/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -198,6 +199,14 @@ func UpdateResource(r rest.Updater, scope *RequestScope, admit admission.Interfa
 			Subresource:     scope.Subresource,
 			Namespace:       namespace,
 			Name:            name,
+		}
+
+		obj = &unstructured.Unstructured{}
+		_, _, err = unstructured.UnstructuredJSONScheme.Decode(body, nil, obj)
+		if err != nil {
+			err = errors.NewInternalError(fmt.Errorf("failed to decode body into *unstructured.unstructured: %v", err))
+			scope.err(err, w, req)
+			return
 		}
 
 		span.AddEvent("About to store object in database")

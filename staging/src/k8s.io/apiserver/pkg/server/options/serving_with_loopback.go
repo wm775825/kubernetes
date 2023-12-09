@@ -24,6 +24,8 @@ import (
 	"k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	certutil "k8s.io/client-go/util/cert"
 )
 
@@ -47,6 +49,10 @@ func (s *SecureServingOptionsWithLoopback) ApplyTo(secureServingInfo **server.Se
 
 	if *secureServingInfo == nil || loopbackClientConfig == nil {
 		return nil
+	}
+
+	if s.LoopbackConfigFile != "" {
+		return s.applyTo(loopbackClientConfig)
 	}
 
 	// create self-signed cert+key with the fake server.LoopbackClientServerNameOverride and
@@ -77,5 +83,28 @@ func (s *SecureServingOptionsWithLoopback) ApplyTo(secureServingInfo **server.Se
 		*loopbackClientConfig = secureLoopbackClientConfig
 	}
 
+	return nil
+}
+
+func (s *SecureServingOptionsWithLoopback) applyTo(loopbackConfig **rest.Config) error {
+	override := &clientcmd.ConfigOverrides{
+		ClusterInfo: clientcmdapi.Cluster{
+			Server:                s.LoopbackServerOverride,
+			InsecureSkipTLSVerify: s.LoopbackInsecureSkipTLSVerifyOverride,
+		},
+	}
+
+	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: s.LoopbackConfigFile}
+	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, override).ClientConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load loopback config: %v", err)
+	}
+	if restConfig.BearerToken == "" {
+		restConfig.BearerToken = uuid.New().String()
+	}
+
+	// Do not limit loopback client QPS.
+	restConfig.QPS = -1
+	*loopbackConfig = restConfig
 	return nil
 }
