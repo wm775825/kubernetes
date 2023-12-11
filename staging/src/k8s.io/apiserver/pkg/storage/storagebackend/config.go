@@ -17,6 +17,9 @@ limitations under the License.
 package storagebackend
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"os"
 	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -44,7 +47,10 @@ const (
 type TransportConfig struct {
 	// ServerList is the list of storage servers to connect with.
 	ServerList []string
-	// TLS credentials
+	// TLS credentials: KeyData takes precedence over KeyFile, so as CertData and TrustedCAData.
+	KeyData       []byte
+	CertData      []byte
+	TrustedCAData []byte
 	KeyFile       string
 	CertFile      string
 	TrustedCAFile string
@@ -125,4 +131,51 @@ func NewDefaultConfig(prefix string, codec runtime.Codec) *Config {
 		LeaseManagerConfig:   etcd3.NewDefaultLeaseManagerConfig(),
 		Transport:            TransportConfig{TracerProvider: oteltrace.NewNoopTracerProvider()},
 	}
+}
+
+func (t *TransportConfig) LoadTLSConfigurations() error {
+	if len(t.KeyFile) != 0 && len(t.KeyData) == 0 {
+		keyData, err := os.ReadFile(t.KeyFile)
+		if err != nil {
+			return err
+		}
+		t.KeyData = keyData
+	}
+	if len(t.CertFile) != 0 && len(t.CertData) == 0 {
+		certData, err := os.ReadFile(t.CertFile)
+		if err != nil {
+			return err
+		}
+		t.CertData = certData
+	}
+	if len(t.TrustedCAFile) != 0 && len(t.TrustedCAData) == 0 {
+		trustCAData, err := os.ReadFile(t.TrustedCAFile)
+		if err != nil {
+			return err
+		}
+		t.TrustedCAData = trustCAData
+	}
+	return nil
+}
+
+func (t *TransportConfig) ClientConfig() (*tls.Config, error) {
+	if err := t.LoadTLSConfigurations(); err != nil {
+		return nil, err
+	}
+
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(t.TrustedCAData)
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: caCertPool}
+
+	cert, err := tls.X509KeyPair(t.CertData, t.KeyData)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return &cert, nil
+	}
+	tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		return &cert, nil
+	}
+	return tlsConfig, nil
 }
