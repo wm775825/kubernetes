@@ -80,8 +80,13 @@ func (r *REST) Categories() []string {
 	return []string{"api-extensions"}
 }
 
-// Delete adds the CRD finalizer to the list
+// Delete forwards the DELETE request to store
 func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	return r.Store.Delete(ctx, name, deleteValidation, options)
+}
+
+// delete adds the CRD finalizer to the list
+func (r *REST) delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
 	obj, err := r.Get(ctx, name, &metav1.GetOptions{})
 	if err != nil {
 		return nil, false, err
