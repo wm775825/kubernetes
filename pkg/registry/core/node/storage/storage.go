@@ -143,7 +143,7 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, kubeletClientConfig client
 		}
 		return externalNode, nil
 	})
-	connectionInfoGetter, err := client.NewNodeConnectionInfoGetter(nodeGetter, kubeletClientConfig)
+	connectionInfoGetter, err := client.NewNodeConnectionInfoGetter(nodeGetter, kubeletClientConfig, store.FleetClientSet())
 	if err != nil {
 		return nil, err
 	}

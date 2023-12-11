@@ -440,7 +440,7 @@ func (f *FleetClientSet) dynamicClientFor(clusterName string) (*dynamic.DynamicC
 	return dynamic.NewForConfig(restConfig)
 }
 
-func (f *FleetClientSet) location(clusterName string) (*url.URL, http.RoundTripper, error) {
+func (f *FleetClientSet) Location(clusterName string) (*url.URL, http.RoundTripper, error) {
 	if clusterName == KarmadaCluster {
 		return f.karmadaLocation, f.karmadaTransport, nil
 	}

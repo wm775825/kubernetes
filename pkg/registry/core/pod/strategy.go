@@ -35,7 +35,9 @@ import (
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
+	"k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/names"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -427,6 +429,12 @@ func LogLocation(
 	name string,
 	opts *api.PodLogOptions,
 ) (*url.URL, http.RoundTripper, error) {
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, nil, fmt.Errorf("no request info found from ctx")
+	}
+	// clear sub resource to get pod
+	info.Subresource = ""
 	pod, err := getPod(ctx, getter, name)
 	if err != nil {
 		return nil, nil, err
@@ -444,7 +452,11 @@ func LogLocation(
 		// If pod has not been assigned a host, return an empty location
 		return nil, nil, nil
 	}
-	nodeInfo, err := connInfo.GetConnectionInfo(ctx, nodeName)
+
+	// reset request info to get node
+	podName, clusterName := registry.ParseNameFromResourceName(info.Name, false)
+	resetRequestInfoToGetNode(info, clusterName, pod.Spec.NodeName)
+	nodeInfo, err := connInfo.GetConnectionInfo(ctx, types.NodeName(info.Name))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -470,10 +482,11 @@ func LogLocation(
 	if opts.LimitBytes != nil {
 		params.Add("limitBytes", strconv.FormatInt(*opts.LimitBytes, 10))
 	}
+	params.Add("container", container)
 	loc := &url.URL{
 		Scheme:   nodeInfo.Scheme,
 		Host:     net.JoinHostPort(nodeInfo.Hostname, nodeInfo.Port),
-		Path:     fmt.Sprintf("/containerLogs/%s/%s/%s", pod.Namespace, pod.Name, container),
+		Path:     fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/log", pod.Namespace, podName),
 		RawQuery: params.Encode(),
 	}
 
@@ -481,6 +494,15 @@ func LogLocation(
 		return loc, nodeInfo.InsecureSkipTLSVerifyTransport, nil
 	}
 	return loc, nodeInfo.Transport, nil
+}
+
+func resetRequestInfoToGetNode(info *request.RequestInfo, clusterName, nodeName string) {
+	info.Resource = "nodes"
+	info.Namespace = ""
+	info.Name = nodeName
+	if clusterName != registry.KarmadaCluster {
+		info.Name += ".clusterspace." + clusterName
+	}
 }
 
 func podHasContainerWithName(pod *api.Pod, containerName string) bool {

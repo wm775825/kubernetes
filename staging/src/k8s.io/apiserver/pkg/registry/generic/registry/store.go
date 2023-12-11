@@ -293,6 +293,10 @@ func NoNamespaceKeyFunc(ctx context.Context, prefix string, name string) (string
 	return key, nil
 }
 
+func (e *Store) FleetClientSet() *FleetClientSet {
+	return e.fleetClientSet
+}
+
 // New implements RESTStorage.New.
 func (e *Store) New() runtime.Object {
 	return e.NewFunc()
