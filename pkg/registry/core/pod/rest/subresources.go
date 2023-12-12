@@ -18,8 +18,14 @@ package rest
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"fmt"
+	"k8s.io/apimachinery/third_party/forked/golang/netutil"
+	"k8s.io/klog/v2"
+	gonet "net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -165,6 +171,7 @@ func (r *ExecREST) Connect(ctx context.Context, name string, opts runtime.Object
 		if len(req.Header.Get("Authorization")) == 0 {
 			req.Header.Set("Authorization", fmt.Sprintf("bearer %s", token))
 		}
+		wrapProxyTransport(transport)
 		handler := newThrottledUpgradeAwareProxyHandler(location, transport, false, true, responder)
 		handler.ServeHTTP(rw, req)
 	}), nil
@@ -228,4 +235,72 @@ func newThrottledUpgradeAwareProxyHandler(location *url.URL, transport http.Roun
 	handler := proxy.NewUpgradeAwareHandler(location, transport, wrapTransport, upgradeRequired, proxy.NewErrorResponder(responder))
 	handler.MaxBytesPerSec = capabilities.Get().PerConnectionBandwidthLimitBytesPerSec
 	return handler
+}
+
+func wrapProxyTransport(transport http.RoundTripper) {
+	switch trans := transport.(type) {
+	case *http.Transport:
+		goto LLL
+	case net.RoundTripperWrapper:
+		wrapProxyTransport(trans.WrappedRoundTripper())
+		return
+	default:
+		return
+	}
+
+LLL:
+	trans := transport.(*http.Transport)
+	if trans.Proxy == nil {
+		return
+	}
+	trans.DialContext = func(ctx context.Context, network, addr string) (gonet.Conn, error) {
+		if network != "tcp" {
+			return nil, fmt.Errorf("only support tcp")
+		}
+		u, _ := trans.Proxy(&http.Request{})
+		proxyReq := http.Request{
+			Method: http.MethodConnect,
+			URL:    &url.URL{},
+			Host:   addr,
+			Header: trans.ProxyConnectHeader,
+		}
+		proxyReq = *proxyReq.WithContext(ctx)
+		if pa := proxyAuth(u); pa != "" {
+			proxyReq.Header.Set("Proxy-Authorization", pa)
+		}
+		dialer := &gonet.Dialer{}
+		var proxyConn gonet.Conn
+		var err error
+		if u.Scheme == "http" {
+			proxyConn, err = dialer.DialContext(ctx, "tcp", netutil.CanonicalAddr(u))
+		} else {
+			tlsDialer := tls.Dialer{NetDialer: dialer, Config: trans.TLSClientConfig}
+			proxyConn, err = tlsDialer.DialContext(ctx, "tcp", netutil.CanonicalAddr(u))
+		}
+		if err != nil {
+			klog.Errorf("wm775825: dial err is %#+v", err)
+			return nil, err
+		}
+		proxyClientConn := httputil.NewProxyClientConn(proxyConn, nil)
+		resp, err := proxyClientConn.Do(&proxyReq)
+		if err != nil && err != httputil.ErrPersistEOF {
+			klog.Errorf("wm775825: do err is %#+v", err)
+			return nil, err
+		}
+		if resp != nil && resp.StatusCode >= 300 || resp.StatusCode < 200 {
+			return nil, fmt.Errorf("CONNECT request to %s returned response: %s", u.Redacted(), resp.Status)
+		}
+		rwc, _ := proxyClientConn.Hijack()
+		return rwc, nil
+	}
+}
+
+func proxyAuth(proxyURL *url.URL) string {
+	if proxyURL == nil || proxyURL.User == nil {
+		return ""
+	}
+	username := proxyURL.User.Username()
+	password, _ := proxyURL.User.Password()
+	auth := username + ":" + password
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
 }
