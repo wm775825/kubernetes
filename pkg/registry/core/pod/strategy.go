@@ -521,13 +521,13 @@ func streamParams(params url.Values, opts runtime.Object) error {
 	switch opts := opts.(type) {
 	case *api.PodExecOptions:
 		if opts.Stdin {
-			params.Add(api.ExecStdinParam, "1")
+			params.Add(api.StreamTypeStdin, "1")
 		}
 		if opts.Stdout {
-			params.Add(api.ExecStdoutParam, "1")
+			params.Add(api.StreamTypeStdout, "1")
 		}
 		if opts.Stderr {
-			params.Add(api.ExecStderrParam, "1")
+			params.Add(api.StreamTypeStderr, "1")
 		}
 		if opts.TTY {
 			params.Add(api.ExecTTYParam, "1")
@@ -595,6 +595,12 @@ func streamLocation(
 	container,
 	path string,
 ) (*url.URL, http.RoundTripper, error) {
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, nil, fmt.Errorf("no request info found from ctx")
+	}
+	// clear sub resource to get pod
+	info.Subresource = ""
 	pod, err := getPod(ctx, getter, name)
 	if err != nil {
 		return nil, nil, err
@@ -612,7 +618,11 @@ func streamLocation(
 		// If pod has not been assigned a host, return an empty location
 		return nil, nil, errors.NewBadRequest(fmt.Sprintf("pod %s does not have a host assigned", name))
 	}
-	nodeInfo, err := connInfo.GetConnectionInfo(ctx, nodeName)
+
+	// reset request info to get node
+	podName, clusterName := registry.ParseNameFromResourceName(info.Name, false)
+	resetRequestInfoToGetNode(info, clusterName, pod.Spec.NodeName)
+	nodeInfo, err := connInfo.GetConnectionInfo(ctx, types.NodeName(info.Name))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -620,10 +630,11 @@ func streamLocation(
 	if err := streamParams(params, opts); err != nil {
 		return nil, nil, err
 	}
+	params.Add("container", container)
 	loc := &url.URL{
 		Scheme:   nodeInfo.Scheme,
 		Host:     net.JoinHostPort(nodeInfo.Hostname, nodeInfo.Port),
-		Path:     fmt.Sprintf("/%s/%s/%s/%s", path, pod.Namespace, pod.Name, container),
+		Path:     fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/%s", pod.Namespace, podName, path),
 		RawQuery: params.Encode(),
 	}
 	return loc, nodeInfo.Transport, nil

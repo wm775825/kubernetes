@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/proxy"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
+	transport2 "k8s.io/client-go/transport"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/capabilities"
 	"k8s.io/kubernetes/pkg/kubelet/client"
@@ -156,7 +157,17 @@ func (r *ExecREST) Connect(ctx context.Context, name string, opts runtime.Object
 	if err != nil {
 		return nil, err
 	}
-	return newThrottledUpgradeAwareProxyHandler(location, transport, false, true, responder), nil
+	token, err := transport2.GetTokenFrom(transport)
+	if err != nil {
+		return nil, err
+	}
+	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if len(req.Header.Get("Authorization")) == 0 {
+			req.Header.Set("Authorization", fmt.Sprintf("bearer %s", token))
+		}
+		handler := newThrottledUpgradeAwareProxyHandler(location, transport, false, true, responder)
+		handler.ServeHTTP(rw, req)
+	}), nil
 }
 
 // NewConnectOptions returns the versioned object that represents exec parameters
