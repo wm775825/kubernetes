@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/managedfields"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -169,6 +170,7 @@ func (r *ScaleREST) New() runtime.Object {
 }
 
 func (r *ScaleREST) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	request.ClearSubresourceInRequestInfo(ctx)
 	obj, err := r.store.Get(ctx, name, options)
 	if err != nil {
 		return nil, err
@@ -195,6 +197,7 @@ func (r *ScaleREST) Update(ctx context.Context, name string, objInfo rest.Update
 		replicasPathMapping: r.replicasPathMapping,
 	}
 
+	request.ClearSubresourceInRequestInfo(ctx)
 	obj, _, err := r.store.Update(
 		ctx,
 		name,
@@ -311,7 +314,7 @@ func (i *scaleUpdatedObjectInfo) Preconditions() *metav1.Preconditions {
 
 func (i *scaleUpdatedObjectInfo) UpdatedObject(ctx context.Context, oldObj runtime.Object) (runtime.Object, error) {
 	if oldObj == nil {
-		return i.reqObjInfo.UpdatedObject(ctx, oldObj)
+		return i.reqObjInfo.UpdatedObject(ctx, nil)
 	}
 
 	cr := oldObj.DeepCopyObject().(*unstructured.Unstructured)

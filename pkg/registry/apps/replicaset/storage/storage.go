@@ -200,6 +200,7 @@ func (r *ScaleREST) Destroy() {
 
 // Get retrieves object from Scale storage.
 func (r *ScaleREST) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	genericapirequest.ClearSubresourceInRequestInfo(ctx)
 	obj, err := r.store.Get(ctx, name, options)
 	if err != nil {
 		return nil, errors.NewNotFound(apps.Resource("replicasets/scale"), name)
@@ -214,6 +215,7 @@ func (r *ScaleREST) Get(ctx context.Context, name string, options *metav1.GetOpt
 
 // Update alters scale subset of ReplicaSet object.
 func (r *ScaleREST) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	genericapirequest.ClearSubresourceInRequestInfo(ctx)
 	obj, _, err := r.store.Update(
 		ctx,
 		name,
@@ -298,6 +300,10 @@ func (i *scaleUpdatedObjectInfo) Preconditions() *metav1.Preconditions {
 }
 
 func (i *scaleUpdatedObjectInfo) UpdatedObject(ctx context.Context, oldObj runtime.Object) (runtime.Object, error) {
+	if oldObj == nil {
+		return i.reqObjInfo.UpdatedObject(ctx, nil)
+	}
+
 	replicaset, ok := oldObj.DeepCopyObject().(*apps.ReplicaSet)
 	if !ok {
 		return nil, errors.NewBadRequest(fmt.Sprintf("expected existing object type to be ReplicaSet, got %T", replicaset))
