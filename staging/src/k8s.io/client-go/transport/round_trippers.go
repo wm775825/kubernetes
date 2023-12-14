@@ -323,6 +323,17 @@ func (rt *bearerAuthRoundTripper) CancelRequest(req *http.Request) {
 
 func (rt *bearerAuthRoundTripper) WrappedRoundTripper() http.RoundTripper { return rt.rt }
 
+func GetTokenFrom(rt http.RoundTripper) (string, error) {
+	switch trans := rt.(type) {
+	case *bearerAuthRoundTripper:
+		return trans.bearer, nil
+	case utilnet.RoundTripperWrapper:
+		return GetTokenFrom(trans.WrappedRoundTripper())
+	default:
+		return "", fmt.Errorf("no token found")
+	}
+}
+
 // requestInfo keeps track of information about a request/response combination
 type requestInfo struct {
 	RequestHeaders http.Header `datapolicy:"token"`

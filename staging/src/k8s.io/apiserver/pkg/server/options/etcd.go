@@ -221,6 +221,9 @@ func (s *EtcdOptions) ApplyTo(c *server.Config) error {
 	if storageConfigCopy.StorageObjectCountTracker == nil {
 		storageConfigCopy.StorageObjectCountTracker = c.StorageObjectCountTracker
 	}
+	if err := storageConfigCopy.Transport.LoadTLSConfigurations(); err != nil {
+		return err
+	}
 
 	return s.ApplyWithStorageFactoryTo(&SimpleStorageFactory{StorageConfig: storageConfigCopy}, c, nil, nil, nil)
 }

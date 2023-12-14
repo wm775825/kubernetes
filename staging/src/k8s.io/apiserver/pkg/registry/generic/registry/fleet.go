@@ -186,6 +186,7 @@ func (f *FleetClientSet) ListPredicate(ctx context.Context, p storage.SelectionP
 	responseRV := mrv.clone()
 	responseContinue := multiClusterContinue{}
 
+	resourceNotFound := sets.NewString()
 	items := make([]runtime.Object, 0, int(math.Min(float64(listOptions.Limit), 1024)))
 	listFunc := func(cluster *clusterv1alpha1.Cluster) (num int, cont string, err error) {
 		clusterName := cluster.Name
@@ -208,7 +209,11 @@ func (f *FleetClientSet) ListPredicate(ctx context.Context, p storage.SelectionP
 
 		objList, err := f.list(ctx, clusterName, info, listOptions)
 		if err != nil {
-			return 0, "", err
+			if !apierrors.IsNotFound(err) {
+				return 0, "", err
+			}
+			resourceNotFound.Insert(clusterName)
+			objList, err = f.NewListFunc(), nil
 		}
 		listAccessor, err := meta.ListAccessor(objList)
 		if err != nil {
@@ -277,6 +282,10 @@ func (f *FleetClientSet) ListPredicate(ctx context.Context, p storage.SelectionP
 	}
 	responseContinue.RV = responseRV.String()
 
+	if resourceNotFound.Len() != 0 {
+		warning.AddWarning(ctx, "fleet-apiserver", fmt.Sprintf("skip list from following clusters [%s] since resource not found", strings.Join(resourceNotFound.List(), ",")))
+	}
+
 	result := f.NewListFunc()
 	if err = meta.SetList(result, items); err != nil {
 		return nil, err
@@ -338,6 +347,9 @@ func (f *FleetClientSet) fillMissingClusterResourceVersion(ctx context.Context, 
 func (f *FleetClientSet) getResourceVersion(ctx context.Context, clusterName string, info *request.RequestInfo) (string, error) {
 	obj, err := f.list(ctx, clusterName, info, &metav1.ListOptions{Limit: 1})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
 		return "", err
 	}
 	listObj, err := meta.ListAccessor(obj)
@@ -428,7 +440,7 @@ func (f *FleetClientSet) dynamicClientFor(clusterName string) (*dynamic.DynamicC
 	return dynamic.NewForConfig(restConfig)
 }
 
-func (f *FleetClientSet) location(clusterName string) (*url.URL, http.RoundTripper, error) {
+func (f *FleetClientSet) Location(clusterName string) (*url.URL, http.RoundTripper, error) {
 	if clusterName == KarmadaCluster {
 		return f.karmadaLocation, f.karmadaTransport, nil
 	}
@@ -594,6 +606,7 @@ func (f *FleetClientSet) WatchPredicate(ctx context.Context, p storage.Selection
 		clusters = append(clusters, &clusterv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: KarmadaCluster}})
 	}
 
+	resourceNotFound := sets.NewString()
 	watcher := newWatchMux()
 	for _, cluster := range clusters {
 		name := cluster.Name
@@ -604,12 +617,20 @@ func (f *FleetClientSet) WatchPredicate(ctx context.Context, p storage.Selection
 		opts.ResourceVersion = mrv.get(name)
 		w, err := f.watcherFor(ctx, name, info, *opts)
 		if err != nil {
+			if apierrors.IsNotFound(err) {
+				resourceNotFound.Insert(name)
+				continue
+			}
 			return nil, err
 		}
 		watcher.AddSource(w, func(event *watch.Event) {
 			setObjectRVFunc(name, event)
 		})
 	}
+	if resourceNotFound.Len() != 0 {
+		warning.AddWarning(ctx, "fleet-apiserver", fmt.Sprintf("skip watch from following clusters [%s] since resource not found", strings.Join(resourceNotFound.List(), ",")))
+	}
+
 	watcher.Start()
 	return watcher, nil
 }

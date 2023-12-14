@@ -275,6 +275,14 @@ func RequestInfoFrom(ctx context.Context) (*RequestInfo, bool) {
 	return info, ok
 }
 
+func ClearSubresourceInRequestInfo(ctx context.Context) {
+	info, ok := ctx.Value(requestInfoKey).(*RequestInfo)
+	if !ok {
+		return
+	}
+	info.Subresource = ""
+}
+
 // splitPath returns the segments for a URL path.
 func splitPath(path string) []string {
 	path = strings.Trim(path, "/")

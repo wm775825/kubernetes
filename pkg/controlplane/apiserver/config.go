@@ -121,6 +121,10 @@ func BuildGenericConfig(
 	} else {
 		s.Etcd.StorageConfig.Transport.TracerProvider = oteltrace.NewNoopTracerProvider()
 	}
+	if err := s.Etcd.StorageConfig.Transport.LoadTLSConfigurations(); err != nil {
+		lastErr = fmt.Errorf("failed to load tls configurations: %v", err)
+		return
+	}
 
 	kubeClientConfig := genericConfig.LoopbackClientConfig
 	clientgoExternalClient, err := clientgoclientset.NewForConfig(kubeClientConfig)

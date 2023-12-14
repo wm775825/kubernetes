@@ -65,6 +65,9 @@ func CreateAPIExtensionsConfig(
 	if etcdOptions.StorageConfig.StorageObjectCountTracker == nil {
 		etcdOptions.StorageConfig.StorageObjectCountTracker = genericConfig.StorageObjectCountTracker
 	}
+	if err := etcdOptions.StorageConfig.Transport.LoadTLSConfigurations(); err != nil {
+		return nil, err
+	}
 	if err := etcdOptions.ApplyWithStorageFactoryTo(&options.SimpleStorageFactory{StorageConfig: etcdOptions.StorageConfig}, &genericConfig, kubeInformers, karmadaInformers, genericConfig.LoopbackClientConfig); err != nil {
 		return nil, err
 	}

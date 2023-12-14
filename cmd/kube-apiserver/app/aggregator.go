@@ -102,6 +102,9 @@ func createAggregatorConfig(
 	if etcdOptions.StorageConfig.StorageObjectCountTracker == nil {
 		etcdOptions.StorageConfig.StorageObjectCountTracker = genericConfig.StorageObjectCountTracker
 	}
+	if err := etcdOptions.StorageConfig.Transport.LoadTLSConfigurations(); err != nil {
+		return nil, err
+	}
 	if err := etcdOptions.ApplyWithStorageFactoryTo(&options.SimpleStorageFactory{StorageConfig: etcdOptions.StorageConfig}, &genericConfig, externalInformers, karmadaInformers, genericConfig.LoopbackClientConfig); err != nil {
 		return nil, err
 	}

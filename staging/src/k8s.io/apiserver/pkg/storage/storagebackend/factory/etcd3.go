@@ -18,6 +18,7 @@ package factory
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"math/rand"
@@ -283,12 +284,18 @@ func (t *etcd3ProberMonitor) Monitor(ctx context.Context) (metrics.StorageMetric
 }
 
 var newETCD3Client = func(c storagebackend.TransportConfig) (*clientv3.Client, error) {
-	tlsInfo := transport.TLSInfo{
-		CertFile:      c.CertFile,
-		KeyFile:       c.KeyFile,
-		TrustedCAFile: c.TrustedCAFile,
+	var tlsConfig *tls.Config
+	var err error
+	if len(c.CertData) != 0 && len(c.KeyData) != 0 && len(c.TrustedCAData) != 0 {
+		tlsConfig, err = c.ClientConfig()
+	} else {
+		tlsInfo := transport.TLSInfo{
+			CertFile:      c.CertFile,
+			KeyFile:       c.KeyFile,
+			TrustedCAFile: c.TrustedCAFile,
+		}
+		tlsConfig, err = tlsInfo.ClientConfig()
 	}
-	tlsConfig, err := tlsInfo.ClientConfig()
 	if err != nil {
 		return nil, err
 	}

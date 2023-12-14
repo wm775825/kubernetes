@@ -20,12 +20,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/server/egressselector"
 	"k8s.io/client-go/transport"
 	nodeutil "k8s.io/kubernetes/pkg/util/node"
@@ -155,10 +157,12 @@ type NodeConnectionInfoGetter struct {
 	insecureSkipTLSVerifyTransport http.RoundTripper
 	// preferredAddressTypes specifies the preferred order to use to find a node address
 	preferredAddressTypes []v1.NodeAddressType
+
+	clusterTransportGetter func(string) (*url.URL, http.RoundTripper, error)
 }
 
 // NewNodeConnectionInfoGetter creates a new NodeConnectionInfoGetter.
-func NewNodeConnectionInfoGetter(nodes NodeGetter, config KubeletClientConfig) (ConnectionInfoGetter, error) {
+func NewNodeConnectionInfoGetter(nodes NodeGetter, config KubeletClientConfig, fleet *registry.FleetClientSet) (ConnectionInfoGetter, error) {
 	transport, err := MakeTransport(&config)
 	if err != nil {
 		return nil, err
@@ -173,6 +177,16 @@ func NewNodeConnectionInfoGetter(nodes NodeGetter, config KubeletClientConfig) (
 		types = append(types, v1.NodeAddressType(t))
 	}
 
+	clusterTransportGetter := func(clusterName string) (*url.URL, http.RoundTripper, error) {
+		if fleet != nil {
+			return fleet.Location(clusterName)
+		}
+		return nil, nil, fmt.Errorf("no fleet clientset found")
+	}
+	if fleet == nil {
+		clusterTransportGetter = nil
+	}
+
 	return &NodeConnectionInfoGetter{
 		nodes:                          nodes,
 		scheme:                         "https",
@@ -181,11 +195,28 @@ func NewNodeConnectionInfoGetter(nodes NodeGetter, config KubeletClientConfig) (
 		insecureSkipTLSVerifyTransport: insecureSkipTLSVerifyTransport,
 
 		preferredAddressTypes: types,
+
+		clusterTransportGetter: clusterTransportGetter,
 	}, nil
 }
 
 // GetConnectionInfo retrieves connection info from the status of a Node API object.
 func (k *NodeConnectionInfoGetter) GetConnectionInfo(ctx context.Context, nodeName types.NodeName) (*ConnectionInfo, error) {
+	if k.clusterTransportGetter != nil {
+		_, clusterName := registry.ParseNameFromResourceName(string(nodeName), false)
+		location, trans, err := k.clusterTransportGetter(clusterName)
+		if err != nil {
+			return nil, err
+		}
+		return &ConnectionInfo{
+			Scheme:                         location.Scheme,
+			Hostname:                       location.Hostname(),
+			Port:                           location.Port(),
+			Transport:                      trans,
+			InsecureSkipTLSVerifyTransport: trans,
+		}, nil
+	}
+
 	node, err := k.nodes.Get(ctx, string(nodeName), metav1.GetOptions{})
 	if err != nil {
 		return nil, err
