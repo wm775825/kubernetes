@@ -511,6 +511,11 @@ func (f *FleetClientSet) restConfigFor(clusterName string) (*restclient.Config, 
 		DialContext:     proxyDialerFn,
 		TLSClientConfig: tlsConfig,
 	})
+	// We don't need the default env proxy. When making cluster requests,
+	// we need to determine whether to initiate a proxy request based on
+	// whether the proxy is nil or not.
+	// As a result, we do not support reading proxy ino from env variables.
+	trans.Proxy = nil
 
 	if proxyURL := cluster.Spec.ProxyURL; proxyURL != "" {
 		u, err := url.Parse(proxyURL)
