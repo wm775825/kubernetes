@@ -18,9 +18,13 @@ package storage
 
 import (
 	"context"
+	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -63,6 +67,21 @@ func NewREST(optsGetter generic.RESTOptionsGetter) (*REST, *StatusREST, error) {
 	statusStore.UpdateStrategy = ingress.StatusStrategy
 	statusStore.ResetFieldsStrategy = ingress.StatusStrategy
 	return &REST{store}, &StatusREST{store: &statusStore}, nil
+}
+
+func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	info, ok := request.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, false, fmt.Errorf("no request info found from ctx")
+	}
+
+	_, clusterName := genericregistry.ParseNameFromResourceName(info.Name, false)
+	if clusterName != genericregistry.KarmadaCluster {
+		action := fmt.Sprintf("%s in the member cluster(%s)", info.Verb, clusterName)
+		return nil, false, apierrors.NewMethodNotSupported(schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}, action)
+	}
+
+	return r.Store.Update(ctx, name, objInfo, createValidation, updateValidation, forceAllowCreate, options)
 }
 
 // Implement ShortNamesProvider
