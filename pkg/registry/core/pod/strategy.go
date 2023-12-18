@@ -631,9 +631,14 @@ func streamLocation(
 		return nil, nil, err
 	}
 	params.Add("container", container)
+
+	host := nodeInfo.Hostname
+	if len(nodeInfo.Port) != 0 {
+		host = net.JoinHostPort(nodeInfo.Hostname, nodeInfo.Port)
+	}
 	loc := &url.URL{
 		Scheme:   nodeInfo.Scheme,
-		Host:     net.JoinHostPort(nodeInfo.Hostname, nodeInfo.Port),
+		Host:     host,
 		Path:     fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/%s", pod.Namespace, podName, path),
 		RawQuery: params.Encode(),
 	}
