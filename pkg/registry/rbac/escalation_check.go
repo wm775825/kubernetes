@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -98,7 +99,7 @@ func RoleEscalationAuthorized(ctx context.Context, a authorizer.Authorizer) bool
 }
 
 // BindingAuthorized returns true if the user associated with the context is explicitly authorized to bind the specified roleRef
-func BindingAuthorized(ctx context.Context, roleRef rbac.RoleRef, bindingNamespace string, a authorizer.Authorizer) bool {
+func BindingAuthorized(ctx context.Context, roleRef rbacv1.RoleRef, bindingNamespace string, a authorizer.Authorizer) bool {
 	if a == nil {
 		return false
 	}

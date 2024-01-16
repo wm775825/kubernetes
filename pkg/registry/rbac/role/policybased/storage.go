@@ -20,6 +20,7 @@ package policybased
 import (
 	"context"
 
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -68,10 +69,11 @@ func (s *Storage) Create(ctx context.Context, obj runtime.Object, createValidati
 	if rbacregistry.EscalationAllowed(ctx) || rbacregistry.RoleEscalationAuthorized(ctx, s.authorizer) {
 		return s.StandardStorage.Create(ctx, obj, createValidation, options)
 	}
-
-	role := obj.(*rbac.Role)
-	rules := role.Rules
-	if err := rbacregistryvalidation.ConfirmNoEscalationInternal(ctx, s.ruleResolver, rules); err != nil {
+	role := &rbacv1.Role{}
+	if err := rbacregistry.ConvertTo(obj, &role); err != nil {
+		return nil, err
+	}
+	if err := rbacregistryvalidation.ConfirmNoEscalation(ctx, s.ruleResolver, role.Rules); err != nil {
 		return nil, errors.NewForbidden(groupResource, role.Name, err)
 	}
 	return s.StandardStorage.Create(ctx, obj, createValidation, options)
@@ -83,15 +85,16 @@ func (s *Storage) Update(ctx context.Context, name string, obj rest.UpdatedObjec
 	}
 
 	nonEscalatingInfo := rest.WrapUpdatedObjectInfo(obj, func(ctx context.Context, obj runtime.Object, oldObj runtime.Object) (runtime.Object, error) {
-		role := obj.(*rbac.Role)
-
 		// if we're only mutating fields needed for the GC to eventually delete this obj, return
 		if rbacregistry.IsOnlyMutatingGCFields(obj, oldObj, kapihelper.Semantic) {
 			return obj, nil
 		}
 
-		rules := role.Rules
-		if err := rbacregistryvalidation.ConfirmNoEscalationInternal(ctx, s.ruleResolver, rules); err != nil {
+		role := &rbacv1.Role{}
+		if err := rbacregistry.ConvertTo(obj, &role); err != nil {
+			return nil, err
+		}
+		if err := rbacregistryvalidation.ConfirmNoEscalation(ctx, s.ruleResolver, role.Rules); err != nil {
 			return nil, errors.NewForbidden(groupResource, role.Name, err)
 		}
 		return obj, nil

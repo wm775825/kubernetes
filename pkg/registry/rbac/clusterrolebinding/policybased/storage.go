@@ -28,7 +28,6 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	kapihelper "k8s.io/kubernetes/pkg/apis/core/helper"
 	"k8s.io/kubernetes/pkg/apis/rbac"
-	rbacv1helpers "k8s.io/kubernetes/pkg/apis/rbac/v1"
 	rbacregistry "k8s.io/kubernetes/pkg/registry/rbac"
 	rbacregistryvalidation "k8s.io/kubernetes/pkg/registry/rbac/validation"
 )
@@ -70,18 +69,15 @@ func (s *Storage) Create(ctx context.Context, obj runtime.Object, createValidati
 	if rbacregistry.EscalationAllowed(ctx) {
 		return s.StandardStorage.Create(ctx, obj, createValidation, options)
 	}
-
-	clusterRoleBinding := obj.(*rbac.ClusterRoleBinding)
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{}
+	if err := rbacregistry.ConvertTo(obj, &clusterRoleBinding); err != nil {
+		return nil, err
+	}
 	if rbacregistry.BindingAuthorized(ctx, clusterRoleBinding.RoleRef, metav1.NamespaceNone, s.authorizer) {
 		return s.StandardStorage.Create(ctx, obj, createValidation, options)
 	}
 
-	v1RoleRef := rbacv1.RoleRef{}
-	err := rbacv1helpers.Convert_rbac_RoleRef_To_v1_RoleRef(&clusterRoleBinding.RoleRef, &v1RoleRef, nil)
-	if err != nil {
-		return nil, err
-	}
-	rules, err := s.ruleResolver.GetRoleReferenceRules(v1RoleRef, metav1.NamespaceNone)
+	rules, err := s.ruleResolver.GetRoleReferenceRules(clusterRoleBinding.RoleRef, metav1.NamespaceNone)
 	if err != nil {
 		return nil, err
 	}
@@ -97,25 +93,22 @@ func (s *Storage) Update(ctx context.Context, name string, obj rest.UpdatedObjec
 	}
 
 	nonEscalatingInfo := rest.WrapUpdatedObjectInfo(obj, func(ctx context.Context, obj runtime.Object, oldObj runtime.Object) (runtime.Object, error) {
-		clusterRoleBinding := obj.(*rbac.ClusterRoleBinding)
-
 		// if we're only mutating fields needed for the GC to eventually delete this obj, return
 		if rbacregistry.IsOnlyMutatingGCFields(obj, oldObj, kapihelper.Semantic) {
 			return obj, nil
 		}
 
+		clusterRoleBinding := &rbacv1.ClusterRoleBinding{}
+		if err := rbacregistry.ConvertTo(obj, &clusterRoleBinding); err != nil {
+			return nil, err
+		}
 		// if we're explicitly authorized to bind this clusterrole, return
 		if rbacregistry.BindingAuthorized(ctx, clusterRoleBinding.RoleRef, metav1.NamespaceNone, s.authorizer) {
 			return obj, nil
 		}
 
 		// Otherwise, see if we already have all the permissions contained in the referenced clusterrole
-		v1RoleRef := rbacv1.RoleRef{}
-		err := rbacv1helpers.Convert_rbac_RoleRef_To_v1_RoleRef(&clusterRoleBinding.RoleRef, &v1RoleRef, nil)
-		if err != nil {
-			return nil, err
-		}
-		rules, err := s.ruleResolver.GetRoleReferenceRules(v1RoleRef, metav1.NamespaceNone)
+		rules, err := s.ruleResolver.GetRoleReferenceRules(clusterRoleBinding.RoleRef, metav1.NamespaceNone)
 		if err != nil {
 			return nil, err
 		}

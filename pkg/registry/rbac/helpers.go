@@ -17,9 +17,11 @@ limitations under the License.
 package rbac
 
 import (
+	"fmt"
 	"reflect"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -47,4 +49,21 @@ func IsOnlyMutatingGCFields(obj, old runtime.Object, equalities conversion.Equal
 	copiedMeta.SetManagedFields(oldMeta.GetManagedFields())
 
 	return equalities.DeepEqual(copied, old)
+}
+
+func ConvertTo[T runtime.Object](from runtime.Object, to *T) error {
+	switch obj := from.(type) {
+	case T:
+		*to = obj
+		return nil
+	case *unstructured.Unstructured:
+		b, err := obj.MarshalJSON()
+		if err != nil {
+			return err
+		}
+		_, _, err = unstructured.UnstructuredJSONScheme.Decode(b, nil, *to)
+		return err
+	default:
+		return fmt.Errorf("unsupported type %T", obj)
+	}
 }
