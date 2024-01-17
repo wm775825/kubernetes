@@ -29,7 +29,6 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	kapihelper "k8s.io/kubernetes/pkg/apis/core/helper"
 	"k8s.io/kubernetes/pkg/apis/rbac"
-	rbacv1helpers "k8s.io/kubernetes/pkg/apis/rbac/v1"
 	rbacregistry "k8s.io/kubernetes/pkg/registry/rbac"
 	rbacregistryvalidation "k8s.io/kubernetes/pkg/registry/rbac/validation"
 )
@@ -79,17 +78,15 @@ func (s *Storage) Create(ctx context.Context, obj runtime.Object, createValidati
 		return nil, errors.NewBadRequest("namespace is required")
 	}
 
-	roleBinding := obj.(*rbac.RoleBinding)
+	roleBinding := &rbacv1.RoleBinding{}
+	if err := rbacregistry.ConvertTo(obj, &roleBinding); err != nil {
+		return nil, err
+	}
 	if rbacregistry.BindingAuthorized(ctx, roleBinding.RoleRef, namespace, s.authorizer) {
 		return s.StandardStorage.Create(ctx, obj, createValidation, options)
 	}
 
-	v1RoleRef := rbacv1.RoleRef{}
-	err := rbacv1helpers.Convert_rbac_RoleRef_To_v1_RoleRef(&roleBinding.RoleRef, &v1RoleRef, nil)
-	if err != nil {
-		return nil, err
-	}
-	rules, err := s.ruleResolver.GetRoleReferenceRules(v1RoleRef, namespace)
+	rules, err := s.ruleResolver.GetRoleReferenceRules(roleBinding.RoleRef, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -112,25 +109,22 @@ func (s *Storage) Update(ctx context.Context, name string, obj rest.UpdatedObjec
 			return nil, errors.NewBadRequest("namespace is required")
 		}
 
-		roleBinding := obj.(*rbac.RoleBinding)
-
 		// if we're only mutating fields needed for the GC to eventually delete this obj, return
 		if rbacregistry.IsOnlyMutatingGCFields(obj, oldObj, kapihelper.Semantic) {
 			return obj, nil
 		}
 
+		roleBinding := &rbacv1.RoleBinding{}
+		if err := rbacregistry.ConvertTo(obj, &roleBinding); err != nil {
+			return nil, err
+		}
 		// if we're explicitly authorized to bind this role, return
 		if rbacregistry.BindingAuthorized(ctx, roleBinding.RoleRef, namespace, s.authorizer) {
 			return obj, nil
 		}
 
 		// Otherwise, see if we already have all the permissions contained in the referenced role
-		v1RoleRef := rbacv1.RoleRef{}
-		err := rbacv1helpers.Convert_rbac_RoleRef_To_v1_RoleRef(&roleBinding.RoleRef, &v1RoleRef, nil)
-		if err != nil {
-			return nil, err
-		}
-		rules, err := s.ruleResolver.GetRoleReferenceRules(v1RoleRef, namespace)
+		rules, err := s.ruleResolver.GetRoleReferenceRules(roleBinding.RoleRef, namespace)
 		if err != nil {
 			return nil, err
 		}

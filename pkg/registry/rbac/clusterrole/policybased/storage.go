@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -75,9 +76,11 @@ func (s *Storage) Create(ctx context.Context, obj runtime.Object, createValidati
 		return s.StandardStorage.Create(ctx, obj, createValidatingAdmission, options)
 	}
 
-	clusterRole := obj.(*rbac.ClusterRole)
-	rules := clusterRole.Rules
-	if err := rbacregistryvalidation.ConfirmNoEscalationInternal(ctx, s.ruleResolver, rules); err != nil {
+	clusterRole := &rbacv1.ClusterRole{}
+	if err := rbacregistry.ConvertTo(obj, &clusterRole); err != nil {
+		return nil, err
+	}
+	if err := rbacregistryvalidation.ConfirmNoEscalation(ctx, s.ruleResolver, clusterRole.Rules); err != nil {
 		return nil, apierrors.NewForbidden(groupResource, clusterRole.Name, err)
 	}
 	// to set the aggregation rule, since it can gather anything, requires * on *.*
@@ -96,17 +99,22 @@ func (s *Storage) Update(ctx context.Context, name string, obj rest.UpdatedObjec
 	}
 
 	nonEscalatingInfo := rest.WrapUpdatedObjectInfo(obj, func(ctx context.Context, obj runtime.Object, oldObj runtime.Object) (runtime.Object, error) {
-		clusterRole := obj.(*rbac.ClusterRole)
-		oldClusterRole := oldObj.(*rbac.ClusterRole)
-
 		// if we're only mutating fields needed for the GC to eventually delete this obj, return
 		if rbacregistry.IsOnlyMutatingGCFields(obj, oldObj, kapihelper.Semantic) {
 			return obj, nil
 		}
 
-		rules := clusterRole.Rules
-		if err := rbacregistryvalidation.ConfirmNoEscalationInternal(ctx, s.ruleResolver, rules); err != nil {
+		clusterRole := &rbacv1.ClusterRole{}
+		if err := rbacregistry.ConvertTo(obj, &clusterRole); err != nil {
+			return nil, err
+		}
+		if err := rbacregistryvalidation.ConfirmNoEscalation(ctx, s.ruleResolver, clusterRole.Rules); err != nil {
 			return nil, apierrors.NewForbidden(groupResource, clusterRole.Name, err)
+		}
+
+		oldClusterRole := &rbacv1.ClusterRole{}
+		if err := rbacregistry.ConvertTo(oldObj, &oldClusterRole); err != nil {
+			return nil, err
 		}
 		// to change the aggregation rule, since it can gather anything and prevent tightening, requires * on *.*
 		if hasAggregationRule(clusterRole) || hasAggregationRule(oldClusterRole) {
@@ -121,7 +129,7 @@ func (s *Storage) Update(ctx context.Context, name string, obj rest.UpdatedObjec
 	return s.StandardStorage.Update(ctx, name, nonEscalatingInfo, createValidation, updateValidation, forceAllowCreate, options)
 }
 
-func hasAggregationRule(clusterRole *rbac.ClusterRole) bool {
+func hasAggregationRule(clusterRole *rbacv1.ClusterRole) bool {
 	return clusterRole.AggregationRule != nil && len(clusterRole.AggregationRule.ClusterRoleSelectors) > 0
 }
 
