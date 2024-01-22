@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -348,6 +349,12 @@ func (e *Store) List(ctx context.Context, options *metainternalversion.ListOptio
 	if options != nil && options.LabelSelector != nil {
 		label = options.LabelSelector
 	}
+	require, err := labels.NewRequirement("karmada.io/managed", selection.NotEquals, []string{"true"})
+	if err != nil {
+		return nil, err
+	}
+	label = label.Add(*require)
+
 	field := fields.Everything()
 	if options != nil && options.FieldSelector != nil {
 		field = options.FieldSelector
@@ -1408,6 +1415,12 @@ func (e *Store) Watch(ctx context.Context, options *metainternalversion.ListOpti
 	if options != nil && options.LabelSelector != nil {
 		label = options.LabelSelector
 	}
+	require, err := labels.NewRequirement("karmada.io/managed", selection.NotEquals, []string{"true"})
+	if err != nil {
+		return nil, err
+	}
+	label = label.Add(*require)
+
 	field := fields.Everything()
 	if options != nil && options.FieldSelector != nil {
 		field = options.FieldSelector
