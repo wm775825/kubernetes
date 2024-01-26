@@ -251,6 +251,19 @@ const (
 	resourceCountPollPeriodJitter = 1.2
 )
 
+// fleetResourceView is used to represent the presentation view of resources when querying fleet resources.
+type fleetResourceView string
+
+const (
+	// fleetResourceViewKey indicates the key of represent type when querying fleet resources.
+	fleetResourceViewKey = "fleet-resource-view"
+
+	// includePropagated indicates the type of fleet resource view that include Karmada propagated resources.
+	includePropagated fleetResourceView = "include-propagated"
+
+	karmadaManagedLabel = "karmada.io/managed"
+)
+
 // NamespaceKeyRootFunc is the default function for constructing storage paths
 // to resource directories enforcing namespace rules.
 func NamespaceKeyRootFunc(ctx context.Context, prefix string) string {
@@ -349,11 +362,15 @@ func (e *Store) List(ctx context.Context, options *metainternalversion.ListOptio
 	if options != nil && options.LabelSelector != nil {
 		label = options.LabelSelector
 	}
-	require, err := labels.NewRequirement("karmada.io/managed", selection.NotEquals, []string{"true"})
-	if err != nil {
-		return nil, err
+	value, found := label.RequiresExactMatch(fleetResourceViewKey)
+	if !found || value != string(includePropagated) {
+		require, err := labels.NewRequirement(karmadaManagedLabel, selection.NotEquals, []string{"true"})
+		if err != nil {
+			return nil, err
+		}
+		label = label.Add(*require)
 	}
-	label = label.Add(*require)
+	label = removeSpecifiedKey(label)
 
 	field := fields.Everything()
 	if options != nil && options.FieldSelector != nil {
@@ -367,6 +384,22 @@ func (e *Store) List(ctx context.Context, options *metainternalversion.ListOptio
 		e.Decorator(out)
 	}
 	return out, nil
+}
+
+func removeSpecifiedKey(label labels.Selector) labels.Selector {
+	requirements, selectable := label.Requirements()
+	if !selectable {
+		return label
+	}
+
+	newLabel := labels.Everything()
+	for index, requirement := range requirements {
+		if requirement.Key() == fleetResourceViewKey {
+			continue
+		}
+		newLabel = newLabel.Add(requirements[index])
+	}
+	return newLabel
 }
 
 // ListPredicate returns a list of all the items matching the given
@@ -1415,11 +1448,15 @@ func (e *Store) Watch(ctx context.Context, options *metainternalversion.ListOpti
 	if options != nil && options.LabelSelector != nil {
 		label = options.LabelSelector
 	}
-	require, err := labels.NewRequirement("karmada.io/managed", selection.NotEquals, []string{"true"})
-	if err != nil {
-		return nil, err
+	value, found := label.RequiresExactMatch(fleetResourceViewKey)
+	if !found || value != string(includePropagated) {
+		require, err := labels.NewRequirement(karmadaManagedLabel, selection.NotEquals, []string{"true"})
+		if err != nil {
+			return nil, err
+		}
+		label = label.Add(*require)
 	}
-	label = label.Add(*require)
+	label = removeSpecifiedKey(label)
 
 	field := fields.Everything()
 	if options != nil && options.FieldSelector != nil {
